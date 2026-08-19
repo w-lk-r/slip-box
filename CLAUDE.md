@@ -97,6 +97,8 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 
 - **S3** — source of truth. Each ingested item is written as an atomic `.md` file with YAML frontmatter (source, date, confidence scores, relationship metadata). Human-readable, portable, enables Obsidian sync via `aws s3 sync`.
 - **Bedrock Knowledge Base** — syncs from S3, creates embeddings for semantic retrieval. Indefinite persistence (no expiry). Replaces AgentCore Memory which has a hard 365-day cap incompatible with a permanent second brain.
+  - Write a `.md.metadata.json` sidecar next to each `.md` file so frontmatter is indexed as filterable metadata, not embedded inline with the note body — keeps embeddings semantic rather than diluted with metadata text.
+  - Use hierarchical/semantic chunking (not default fixed-size) for longer literature notes so retrieval doesn't cut mid-section.
 - **DynamoDB** — `items` table (structured metadata per ingested item) and `pending_edges` table (confidence-gated edges awaiting review)
 - **Amazon Neptune** — graph DB for typed edges. Vertex types: `Item`, `Concept`, `PermanentNote`, `Source`. Edge types: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`
 
