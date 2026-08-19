@@ -82,7 +82,7 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 
 ### Two-tier ingestion
 
-- **Default path:** ingest → AgentCore Memory (embed/retrieve) → classification → confidence gate → write to DynamoDB + Neptune
+- **Default path:** ingest → write `.md` to S3 → trigger KB sync → semantic retrieval → classification → confidence gate → write to DynamoDB + Neptune
 - **`--research` flag:** same, but triggers the research agent to fan out before classification
 
 ### Confidence gating
@@ -95,9 +95,10 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 
 ### Storage
 
-- **DynamoDB** — `items` table (source of truth per ingested item) and `pending_edges` table
+- **S3** — source of truth. Each ingested item is written as an atomic `.md` file with YAML frontmatter (source, date, confidence scores, relationship metadata). Human-readable, portable, enables Obsidian sync via `aws s3 sync`.
+- **Bedrock Knowledge Base** — syncs from S3, creates embeddings for semantic retrieval. Indefinite persistence (no expiry). Replaces AgentCore Memory which has a hard 365-day cap incompatible with a permanent second brain.
+- **DynamoDB** — `items` table (structured metadata per ingested item) and `pending_edges` table (confidence-gated edges awaiting review)
 - **Amazon Neptune** — graph DB for typed edges. Vertex types: `Item`, `Concept`, `PermanentNote`, `Source`. Edge types: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`
-- **AgentCore Memory** — managed embed/retrieve for the fast default path
 
 ### Hosting
 
@@ -113,7 +114,7 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 
 ### Key Strands tools
 
-- `agent_core_memory` — fast-path embed/retrieve
+- Bedrock Knowledge Base retrieval — semantic search against ingested `.md` notes
 - Web search/fetch (Tavily/Exa via `strands_tools`) — research fan-out
 - Custom `@tool` functions — Neptune writes, DynamoDB writes, YouTube transcript extraction, SWOT logic
 - `handoff_to_user` — confidence-gated human review

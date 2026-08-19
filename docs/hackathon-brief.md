@@ -36,15 +36,17 @@ Real Zettelkasten distinction, not just naming:
 - **Strands Agents SDK** — agent logic, tool orchestration. Model-agnostic; calls Bedrock in this build.
 - **Amazon Bedrock** — LLM inference (reasoning, classification, embeddings).
 - **AgentCore Runtime** — hosting layer. Containerized (arm64, ECR), session-isolated (dedicated microVM per session), supports long-running workloads up to 8 hrs (vs. Lambda's 15-min ceiling) — needed for the multi-agent `--research` chain. Explicitly called out by the hackathon as strengthening Technical Implementation score.
-- **AgentCore Memory** — managed embed/retrieve for the fast no-flag path. Minimal code, good demo speed. (Tradeoff: coarser retrieval control than a hand-tuned vector store; can't retroactively reprocess old sessions.)
+- ~~**AgentCore Memory**~~ — **Replaced.** AgentCore Memory has a hard 365-day expiry cap (schema-enforced, no unlimited option), making it unsuitable as a permanent knowledge store. Replaced with Bedrock Knowledge Base + S3.
 
 **Storage:**
-- **DynamoDB** — `items` table: source of truth per ingested item (id, source, raw text/S3 pointer, mode, status, summary, SWOT, embedding pointer, cluster_id). Also `pending_edges` table.
+- **S3** — primary document store. Each ingested item written as an atomic `.md` file with YAML frontmatter. Human-readable, portable, enables Obsidian sync via `aws s3 sync`. Indefinite persistence.
+- **Bedrock Knowledge Base** — syncs from S3, creates embeddings for semantic retrieval. Replaces AgentCore Memory. No expiry, better retrieval control, and notes remain accessible as plain `.md` files independent of the KB.
+- **DynamoDB** — `items` table: structured metadata per ingested item (id, source, S3 key, mode, status, summary, SWOT, cluster_id). Also `pending_edges` table.
 - **Amazon Neptune (graph DB)** — the actual connections model. Vertices: `Item`, `Concept`/`PermanentNote`, `Source`. Typed edges: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`. Chosen over pure vector search because the product is literally about a graph of typed relationships — more visible/demoable design choice than nearest-neighbor lookup.
 - (Alternative considered: OpenSearch Serverless for custom vector control; S3 Vectors for cheapest/simplest. Neptune preferred for the graph-native fit.)
 
 **Tools (Strands):**
-- `agent_core_memory` — fast-path embed/retrieve.
+- Bedrock Knowledge Base retrieval — semantic search against ingested `.md` notes.
 - Web search/fetch tools (Tavily/Exa via `strands_tools`) — outward research fan-out.
 - Custom `@tool` functions — Neptune writes, DynamoDB writes, YouTube transcript extraction (youtube-transcript-api / yt-dlp), SWOT logic.
 - `handoff_to_user` — human-in-the-loop confidence gating.

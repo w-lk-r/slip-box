@@ -4,17 +4,21 @@ Ideas and enhancements explicitly out of scope for the hackathon MVP but worth b
 
 ---
 
-## Obsidian / Markdown Export
+## Obsidian / Local Sync
 
-Export the knowledge graph as a local vault of `.md` files compatible with Obsidian and other markdown-based tools.
+Notes are already stored as `.md` files in S3 (the Bedrock Knowledge Base document store), so local sync is straightforward — no special export step required.
 
-- Each `Item` and `PermanentNote` becomes an atomic `.md` file
-- Typed relationships (SUPPORTS / CONTRADICTS / EXTENDS) represented as Obsidian `[[wikilinks]]` with inline relationship labels
-- Confidence scores and edge metadata written as YAML frontmatter
-- Vault can be synced locally or via S3 → local sync tool (e.g. `rclone`)
-- Stretch: two-way sync — edits made in Obsidian propagate back to the graph
+```bash
+aws s3 sync s3://slip-box-notes/ ~/ObsidianVault/SlipBox/
+```
 
-**Why deferred:** AgentCore Runtime is cloud-hosted and can't write to a local filesystem. S3 as the vault store adds sync complexity that competes with the hackathon deadline. The graph UI tells the demo story better for judges. Framed in the pitch as "export to Obsidian" future work.
+**What's built-in:**
+- Each ingested item is written as an atomic `.md` file with YAML frontmatter (source, date, confidence scores, relationship metadata)
+- S3 sync brings those files into any local vault
+
+**What remains future work:**
+- Typed relationships (SUPPORTS / CONTRADICTS / EXTENDS) as Obsidian `[[wikilinks]]` — requires a post-processing step to rewrite edge metadata as wiki-style links
+- Two-way sync — edits made in Obsidian propagating back to the graph
 
 ---
 
