@@ -23,6 +23,12 @@ A "second brain" / Zettelkasten-inspired research agent. You send it sources (ar
 - Build using Strands' native `handoff_to_user` tool for the pause/resume pattern rather than custom logic — reads better in code review.
 - 70% threshold should be a config value, not hardcoded — tune once real classification-prompt confidence distribution is observed.
 
+**Connections live on the card, matching the original method.** Luhmann's slip-box notes carried explicit references to other notes, written on the card itself — not in a separate index. Reflecting that:
+- `auto`/confirmed connections are written into the note's own **frontmatter** (not the body) as typed link lists — `supports: ["[[item-1234]]"]`, `contradicts: [...]`, `extends: [...]`, `related_to: [...]` — using `[[wikilinks]]` so Obsidian's native graph/backlinks picks them up. Regenerated from Neptune's current edge state on every change, never appended, so the file can't drift out of sync. Body stays pure prose (user/model-authored); frontmatter stays system-generated — no risk of a sync process clobbering hand-written text.
+- Excluded from KB embedding (same principle as the rest of frontmatter) — mirrored into `.md.metadata.json` instead, so Bedrock KB can filter by connection without diluting semantic retrieval.
+- **Neptune stays the source of truth for the graph.** S3 remains source of truth for note *content*; the frontmatter connections are a generated reflection, never authored directly.
+- **Stretch:** pending connections also appear in frontmatter (`status: pending` vs. `auto`/`confirmed`), making the note itself a second review surface. Editing a connection's status in a synced note and pushing via `aws s3 sync` triggers an S3 event → Lambda parses the frontmatter diff → calls the *same* accept/reject function the Pending Edge Review UI uses — reuses existing logic rather than duplicating it. Frontmatter-diffing for reliable intent (accept vs. reject vs. a stale local edit) is real edge-case work; build after the MVP review UI is solid, not alongside it.
+
 ## Note Taxonomy: Literature Notes, Ideas, and Summary Cards (stretch feature)
 
 Real Zettelkasten distinction, not just naming — and not a uniform rule across all three types. `Item` and `SummaryCard` are *information transformation* (extract, summarize, roll up existing material) — AI doing this well doesn't undercut the method. `PermanentNote` is different: the value of a permanent note is the human forming the idea in their own words: that's the cognitive work the whole method is built around, so it's user-authored only, no model draft state.
@@ -87,7 +93,7 @@ Same append-only `history` log and pending/confirm/override UX as edges — auth
 ## Scope: MVP vs. Stretch
 
 - **MVP:** ingest (URL/text/PDF/YouTube transcript) → embed → auto-link (confidence gate) → pending-edge review → basic graph view.
-- **Stretch:** `--research` flag fan-out, SWOT analysis, literature/permanent note promotion.
+- **Stretch:** `--research` flag fan-out, SWOT analysis, literature/permanent note promotion, frontmatter as a pending-connection review surface.
 - Build MVP fully solid first — it's the demo safety net — before investing in stretch features.
 
 ## Judging Criteria Strategy (equally weighted, 1–5 scale, +0.6 bonus = 5.6 max)

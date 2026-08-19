@@ -93,6 +93,12 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 - All edges support override; append-only `history` log per edge for provenance.
 - Use `handoff_to_user` from the Strands SDK — do not build custom pause/resume logic.
 
+**Connections live on the card, matching the original method** (Luhmann's notes carried references to other notes on the card itself, not in a separate index):
+- `auto`/confirmed connections are written into the note's own frontmatter (not the body) as typed link lists (`supports`, `contradicts`, `extends`, `related_to`) using `[[wikilinks]]`, so Obsidian's graph/backlinks picks them up. Regenerated from Neptune's current edge state on every change, never appended. Body stays pure prose; frontmatter is system-generated — no clobbering risk.
+- Excluded from KB embedding like the rest of frontmatter; mirrored into `.md.metadata.json` for KB filtering.
+- **Neptune stays the source of truth for the graph** — S3 is source of truth for note content, frontmatter connections are a generated reflection, never authored directly.
+- **Stretch:** pending connections also appear in frontmatter (`status: pending`), making the note a second review surface — an S3 edit synced back triggers a Lambda that calls the same accept/reject function the review UI uses. Build after the MVP review UI is solid.
+
 ### Storage
 
 - **S3** — source of truth. Each ingested item is written as an atomic `.md` file with YAML frontmatter (source, date, confidence scores, relationship metadata). Human-readable, portable, enables Obsidian sync via `aws s3 sync`.
@@ -144,3 +150,4 @@ Build in this order, get each layer solid before moving on:
 2. Pending-edge review UI
 3. `--research` fan-out
 4. SWOT analysis and permanent note promotion (stretch)
+5. Frontmatter as a pending-connection review surface (stretch)
