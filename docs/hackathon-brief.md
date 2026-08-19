@@ -43,6 +43,8 @@ Real Zettelkasten distinction, not just naming — and not a uniform rule across
 
 Same append-only `history` log and pending/confirm/override UX as edges — authorship provenance and confidence gating both fall out of the one pattern already in place.
 
+**Structure notes / MOCs — no new vertex type either.** A MOC is just a `PermanentNote` (user-curated, same as any idea) whose content is a set of `RELATED_TO` links to other notes. Luhmann's original Folgezettel numbering encoded a timeline as much as a topic tree — each note's ID reflected when it was inserted relative to its neighbors — so rather than adding a manual ordering field on the edges, every vertex carries `created_at`/`updated_at` (see Neptune section below) and a MOC's linked notes are simply rendered sorted by `created_at`, reconstructing the chronological-insertion structure on the fly.
+
 ## Architecture — AWS/Python-native (no Supabase; staying in AWS ecosystem)
 
 **Agent layer:**
@@ -58,7 +60,7 @@ Same append-only `history` log and pending/confirm/override UX as edges — auth
   - **Chunking strategy is deliberate, not default fixed-size.** Use hierarchical or semantic chunking for literature notes (longer, source-bound) so retrieval returns coherent sections instead of mid-thought cuts. Short atomic `PermanentNote`s will mostly embed as a single chunk regardless, which is fine.
   - Get this right from the start of MVP step 1 — retrofitting the sidecar/chunking pattern later means a full KB re-sync.
 - **DynamoDB** — `items` table: structured metadata per ingested item (id, source, S3 key, mode, status, summary, SWOT, cluster_id). Also `pending_edges` table.
-- **Amazon Neptune (graph DB)** — the actual connections model. Vertices: `Item`, `Concept`, `PermanentNote`, `SummaryCard` (stretch — see Note Taxonomy below), `Source`. Typed edges: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`. Chosen over pure vector search because the product is literally about a graph of typed relationships — more visible/demoable design choice than nearest-neighbor lookup.
+- **Amazon Neptune (graph DB)** — the actual connections model. Vertices: `Item`, `Concept`, `PermanentNote`, `SummaryCard` (stretch — see Note Taxonomy below), `Source`. Every vertex carries `created_at`/`updated_at` — not just incidental metadata, it's what powers the timeline/MOC view below. Typed edges: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`. Chosen over pure vector search because the product is literally about a graph of typed relationships — more visible/demoable design choice than nearest-neighbor lookup.
 - (Alternative considered: OpenSearch Serverless for custom vector control; S3 Vectors for cheapest/simplest. Neptune preferred for the graph-native fit.)
 
 **Tools (Strands):**
@@ -74,6 +76,7 @@ Same append-only `history` log and pending/confirm/override UX as edges — auth
 - **Next.js / TypeScript** (chosen over FastAPI+HTMX/Streamlit/Reflex — lower risk given existing fluency, better UI ceiling for Design scoring).
 - **FastAPI** as the backend layer between Next.js and AWS — exposes `/ingest`, `/pending-edges`, `/edges/{id}` (accept/reject/override), `/graph`; invokes Strands agents on AgentCore Runtime, reads/writes DynamoDB + Neptune.
 - Three MVP screens: **Ingest** (form + `--research` toggle), **Review queue** (pending edges, accept/reject/override cards), **Graph view** (node-link graph, color-coded by edge type — the demo payoff shot). Suggested libs: react-force-graph (speed) or Cytoscape.js (finer edge-label control).
+  - **Timeline mode (stretch)** — same node/edge data for a MOC's linked notes or a note's neighborhood, laid out along a time axis (by `created_at`) instead of force-directed, replaying the order ideas were actually connected. A rendering toggle on top of existing graph data, not a new backend concept.
 - Hosting: AWS Amplify Hosting (keeps AWS-native story consistent) or Vercel.
 
 ## Source Ingestion Scope

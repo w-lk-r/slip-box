@@ -100,7 +100,7 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
   - Write a `.md.metadata.json` sidecar next to each `.md` file so frontmatter is indexed as filterable metadata, not embedded inline with the note body — keeps embeddings semantic rather than diluted with metadata text.
   - Use hierarchical/semantic chunking (not default fixed-size) for longer literature notes so retrieval doesn't cut mid-section.
 - **DynamoDB** — `items` table (structured metadata per ingested item) and `pending_edges` table (confidence-gated edges awaiting review)
-- **Amazon Neptune** — graph DB for typed edges. Vertex types: `Item`, `Concept`, `PermanentNote`, `SummaryCard` (stretch — see Note taxonomy below), `Source`. Edge types: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`
+- **Amazon Neptune** — graph DB for typed edges. Vertex types: `Item`, `Concept`, `PermanentNote`, `SummaryCard` (stretch — see Note taxonomy below), `Source`. Every vertex carries `created_at`/`updated_at` — powers the timeline/MOC view (see Frontend below). Edge types: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`
 
 ### Hosting
 
@@ -112,6 +112,7 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 - **FastAPI** — backend API between Next.js and AWS (`/ingest`, `/pending-edges`, `/edges/{id}`, `/graph`)
 - **Next.js / TypeScript** — three MVP screens: Ingest, Pending edge review, Graph view
 - Graph visualization: react-force-graph or Cytoscape.js
+- Timeline mode (stretch): same graph data, laid out by `created_at` instead of force-directed, for viewing a MOC's linked notes or a note's neighborhood in chronological/insertion order
 - Hosting: AWS Amplify
 
 ### Key Strands tools
@@ -132,6 +133,8 @@ Not a uniform rule across all three: `Item` and `SummaryCard` are information tr
 **Linkages** — no new edge types; widen the existing distillation edges' allowed vertex types instead:
 - `DISTILLED_INTO`: `Item | PermanentNote` → `PermanentNote | SummaryCard`
 - `GROUNDED_IN`: `PermanentNote | SummaryCard` → `Item`
+
+**Structure notes / MOCs** — also no new vertex type: a MOC is just a `PermanentNote` whose content is a curated set of `RELATED_TO` links. Rather than a manual ordering field, its linked notes render sorted by `created_at` — replicating Luhmann's Folgezettel numbering, which encoded chronological insertion order alongside topic structure.
 
 ## MVP Scope
 
