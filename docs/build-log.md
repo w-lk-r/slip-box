@@ -22,9 +22,14 @@ Chronological record of decisions and progress.
 
 ---
 
+- `agentcore add knowledge-base` — added `SlipCaseKB` backed by `s3://slip-box-notes`
+- `SlipCaseMemory` (AgentCore Memory) already absent from config — no removal needed
+- Deployed KB, uploaded test `.md` note, triggered sync, queried via `aws bedrock-agent-runtime retrieve` — semantic retrieval confirmed working (score 1.0)
+
+---
+
 ## Up Next
 
-- [ ] `agentcore add knowledge-base` — Bedrock Knowledge Base backed by S3
-- [ ] Remove `SlipCaseMemory` (AgentCore Memory) — superseded by Knowledge Base
 - [ ] Rewrite `app/MyAgent/main.py` — ingestion agent system prompt + `ingest_source` tool (writes `.md` to S3, triggers KB sync)
+- [ ] Wire KB retrieval into agent tools
 - [ ] Provision DynamoDB — `items` table and `pending_edges` table
