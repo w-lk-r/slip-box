@@ -20,17 +20,24 @@ See [`docs/hackathon-brief.md`](docs/hackathon-brief.md) for full architecture a
 
 ## Getting Started
 
-**Requirements:** Python 3.14+, AWS credentials with Bedrock access.
+**Requirements:** Python 3.14+, Node.js 20+, `uv`, `agentcore` CLI, AWS credentials with Bedrock access.
 
 ```bash
 git clone https://github.com/w-lk-r/slip-box.git
 cd slip-box
 
-python -m venv .venv
-source .venv/bin/activate
-pip install -r my_agent/requirements.txt
+# Install agentcore CLI
+npm install -g @aws/agentcore
 
-python -m my_agent
+# Install Python dependencies
+cd app/MyAgent && uv sync && cd ../..
+
+# Configure your AWS deployment target
+cp agentcore/aws-targets.sample.json agentcore/aws-targets.json
+# Edit aws-targets.json with your account ID and region
+
+# Run locally
+agentcore dev
 ```
 
 ## Hackathon

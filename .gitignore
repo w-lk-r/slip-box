@@ -16,3 +16,6 @@ venv/
 # IDE/Tools
 .vscode/
 .idea/
+
+# AgentCore deployment target (contains AWS account ID)
+agentcore/aws-targets.json

@@ -1,0 +1,8 @@
+[
+  {
+    "name": "default",
+    "description": "Default deployment target",
+    "account": "YOUR_AWS_ACCOUNT_ID",
+    "region": "YOUR_REGION"
+  }
+]
