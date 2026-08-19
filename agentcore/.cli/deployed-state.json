@@ -9,8 +9,21 @@
             "roleArn": "arn:aws:iam::690445895420:role/AgentCore-SlipBox-default-ApplicationAgentMyAgentRu-afDMrLJar6Wl"
           }
         },
+        "knowledgeBases": {
+          "SlipCaseKB": {
+            "knowledgeBaseId": "EHSL8ZENQX",
+            "knowledgeBaseArn": "arn:aws:bedrock:ap-southeast-2:690445895420:knowledge-base/EHSL8ZENQX",
+            "dataSources": [
+              {
+                "dataSourceId": "JOVFFE1UWC",
+                "uri": "s3://slip-box-notes"
+              }
+            ],
+            "sourcesHash": "fb093677e6d3164eb79084cf22b11088f54f7315d397fff676e94a1044d5a29e"
+          }
+        },
         "stackName": "AgentCore-SlipBox-default",
-        "deployHash": "8d7786ab51bfd04e"
+        "deployHash": "b35a217303611886"
       }
     }
   }

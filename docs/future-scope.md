@@ -38,6 +38,12 @@ Quick-capture from mobile (share sheet, widget, or dedicated app) to send source
 
 ---
 
+## Multi-user Support
+
+Currently single-user — one S3 bucket, one KB, no isolation between users.
+
+**Fix:** S3 prefixes per user (`s3://slip-box-notes/{user-id}/`) + `user_id` in each `.md` file's YAML frontmatter + metadata filtering on KB queries at retrieval time. Bedrock Knowledge Bases support metadata filtering natively, so one bucket and one KB can serve multiple users with full retrieval isolation. No per-user infrastructure needed.
+
 ## Collaborative Vaults
 
 Multi-user knowledge graphs with shared corpora and per-user pending-edge review queues.

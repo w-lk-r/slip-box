@@ -19,7 +19,19 @@
     }
   ],
   "memories": [],
-  "knowledgeBases": [],
+  "knowledgeBases": [
+    {
+      "type": "AgentCoreKnowledgeBase",
+      "name": "SlipCaseKB",
+      "description": "Slip case notes — ingested items stored as .md files, synced for semantic retrieval",
+      "dataSources": [
+        {
+          "type": "S3",
+          "uri": "s3://slip-box-notes"
+        }
+      ]
+    }
+  ],
   "credentials": [],
   "evaluators": [],
   "onlineEvalConfigs": [],
