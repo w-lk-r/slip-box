@@ -100,7 +100,7 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
   - Write a `.md.metadata.json` sidecar next to each `.md` file so frontmatter is indexed as filterable metadata, not embedded inline with the note body — keeps embeddings semantic rather than diluted with metadata text.
   - Use hierarchical/semantic chunking (not default fixed-size) for longer literature notes so retrieval doesn't cut mid-section.
 - **DynamoDB** — `items` table (structured metadata per ingested item) and `pending_edges` table (confidence-gated edges awaiting review)
-- **Amazon Neptune** — graph DB for typed edges. Vertex types: `Item`, `Concept`, `PermanentNote`, `Source`. Edge types: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`
+- **Amazon Neptune** — graph DB for typed edges. Vertex types: `Item`, `Concept`, `PermanentNote`, `SummaryCard` (stretch — see Note taxonomy below), `Source`. Edge types: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`
 
 ### Hosting
 
@@ -121,11 +121,19 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 - Custom `@tool` functions — Neptune writes, DynamoDB writes, YouTube transcript extraction, SWOT logic
 - `handoff_to_user` — confidence-gated human review
 
-### Literature notes vs. permanent notes (stretch)
+### Note taxonomy: literature notes, ideas, summary cards (stretch)
 
-- `Item` model = literature note (source-bound)
-- `PermanentNote` type = atomic, in user's own words, decontextualized
-- Agent never auto-creates permanent notes — it proposes, user confirms. Reuses the same pending/confirm/override UX as edges.
+Three vertex types, each carrying an `authored_by: model | user` provenance field rather than splitting into separate types per authorship:
+
+- `Item` = literature note (source-bound). `authored_by: model` is the default (ingestion agent extraction, auto-written, no gate); `authored_by: user` when the user writes/replaces it directly. `edited_by_user: bool` flags a model note later hand-edited.
+- `PermanentNote` = idea, atomic, decontextualized. `authored_by: model` ("model-derived idea") is always `status: draft` until confirmed; `authored_by: user` ("my idea") is `status: confirmed` immediately. Agent never auto-creates a confirmed permanent note — it proposes, user confirms.
+- `SummaryCard` = cluster-synthesis rollup spanning multiple items/ideas (SWOT/analysis agent output). `authored_by: model` ("model-derived summary card") stages `status: draft` pending confirm, same as model-derived ideas; `authored_by: user` for a manually assembled rollup.
+
+All three reuse the same pending/confirm/override UX and append-only `history` log as edges — no new pattern per type.
+
+**Linkages** — no new edge types; widen the existing distillation edges' allowed vertex types instead:
+- `DISTILLED_INTO`: `Item | PermanentNote` → `PermanentNote | SummaryCard`
+- `GROUNDED_IN`: `PermanentNote | SummaryCard` → `Item`
 
 ## MVP Scope
 

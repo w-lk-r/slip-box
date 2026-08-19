@@ -23,12 +23,27 @@ A "second brain" / Zettelkasten-inspired research agent. You send it sources (ar
 - Build using Strands' native `handoff_to_user` tool for the pause/resume pattern rather than custom logic — reads better in code review.
 - 70% threshold should be a config value, not hardcoded — tune once real classification-prompt confidence distribution is observed.
 
-## Literature Notes vs. Permanent Notes (stretch feature)
+## Note Taxonomy: Literature Notes, Ideas, and Summary Cards (stretch feature)
 
-Real Zettelkasten distinction, not just naming:
-- **Literature note** = existing `Item` model — source-bound, extracted/summarized in relation to its source.
-- **Permanent note** = new `PermanentNote` type — atomic, in the user's own words, decontextualized, connects to other permanent notes.
-- **Critical rule:** agent never auto-creates permanent notes. It *proposes* (e.g., "these 4 items keep pointing at the same idea — draft a permanent note?"), user edits/confirms. Reuses the same pending/confirm/override UX as edges — no new pattern needed.
+Real Zettelkasten distinction, not just naming. Three vertex types, each carrying an `authored_by: model | user` provenance field rather than splitting into separate types per authorship — reuses the same pending/confirm/override UX already built for edges, no new pattern per type:
+
+- **Literature note** (`Item`) — source-bound, extracted/summarized in relation to its source.
+  - `authored_by: model` — the default: ingestion agent extracts/summarizes on ingest, auto-written, no confidence gate (it's an extraction, not a claim).
+  - `authored_by: user` — user writes/replaces the note directly instead of accepting the agent's extraction.
+  - `edited_by_user: bool` flags a model-authored note that was later hand-edited (hybrid provenance).
+- **Idea** (`PermanentNote`) — atomic, in the user's own words, decontextualized.
+  - `authored_by: model` ("model-derived idea") — agent notices a pattern across items and proposes a permanent note. Always `status: draft` until the user confirms.
+  - `authored_by: user` ("my idea") — user writes their own idea from scratch; `status: confirmed` immediately, no gate needed since it's already theirs.
+  - **Critical rule unchanged:** agent never auto-*creates* a confirmed permanent note. It *proposes* (e.g., "these 4 items keep pointing at the same idea — draft a permanent note?"), user edits/confirms.
+- **Summary card** (`SummaryCard`, new vertex type) — a cluster-synthesis rollup spanning multiple items/ideas (e.g. output of the SWOT/analysis agent), distinct from a single-source literature note.
+  - `authored_by: model` ("model-derived summary card") — the common case: analysis agent synthesizes a cluster, staged `status: draft` pending user confirm, same gate as model-derived ideas.
+  - `authored_by: user` — user assembles or edits a rollup card manually.
+
+**Linkages** — no new edge types needed; widen which vertex types the two existing distillation edges connect:
+- `DISTILLED_INTO`: `Item | PermanentNote` → `PermanentNote | SummaryCard` — a literature note or idea distilled into a more atomic idea, or several distilled into a broader synthesis card.
+- `GROUNDED_IN`: `PermanentNote | SummaryCard` → `Item` — an idea or summary card cites the specific literature notes it's grounded in, keeping an evidence trail back to source-bound notes.
+
+Same append-only `history` log and pending/confirm/override UX as edges — authorship provenance and confidence gating both fall out of the one pattern already in place.
 
 ## Architecture — AWS/Python-native (no Supabase; staying in AWS ecosystem)
 
@@ -45,7 +60,7 @@ Real Zettelkasten distinction, not just naming:
   - **Chunking strategy is deliberate, not default fixed-size.** Use hierarchical or semantic chunking for literature notes (longer, source-bound) so retrieval returns coherent sections instead of mid-thought cuts. Short atomic `PermanentNote`s will mostly embed as a single chunk regardless, which is fine.
   - Get this right from the start of MVP step 1 — retrofitting the sidecar/chunking pattern later means a full KB re-sync.
 - **DynamoDB** — `items` table: structured metadata per ingested item (id, source, S3 key, mode, status, summary, SWOT, cluster_id). Also `pending_edges` table.
-- **Amazon Neptune (graph DB)** — the actual connections model. Vertices: `Item`, `Concept`/`PermanentNote`, `Source`. Typed edges: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`. Chosen over pure vector search because the product is literally about a graph of typed relationships — more visible/demoable design choice than nearest-neighbor lookup.
+- **Amazon Neptune (graph DB)** — the actual connections model. Vertices: `Item`, `Concept`, `PermanentNote`, `SummaryCard` (stretch — see Note Taxonomy below), `Source`. Typed edges: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`. Chosen over pure vector search because the product is literally about a graph of typed relationships — more visible/demoable design choice than nearest-neighbor lookup.
 - (Alternative considered: OpenSearch Serverless for custom vector control; S3 Vectors for cheapest/simplest. Neptune preferred for the graph-native fit.)
 
 **Tools (Strands):**
