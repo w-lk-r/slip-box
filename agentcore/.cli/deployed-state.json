@@ -1,3 +1,17 @@
 {
-  "targets": {}
+  "targets": {
+    "default": {
+      "resources": {
+        "runtimes": {
+          "MyAgent": {
+            "runtimeId": "SlipBox_MyAgent-wy1BfP93X9",
+            "runtimeArn": "arn:aws:bedrock-agentcore:ap-southeast-2:690445895420:runtime/SlipBox_MyAgent-wy1BfP93X9",
+            "roleArn": "arn:aws:iam::690445895420:role/AgentCore-SlipBox-default-ApplicationAgentMyAgentRu-afDMrLJar6Wl"
+          }
+        },
+        "stackName": "AgentCore-SlipBox-default",
+        "deployHash": "8d7786ab51bfd04e"
+      }
+    }
+  }
 }
