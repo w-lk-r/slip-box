@@ -25,18 +25,16 @@ A "second brain" / Zettelkasten-inspired research agent. You send it sources (ar
 
 ## Note Taxonomy: Literature Notes, Ideas, and Summary Cards (stretch feature)
 
-Real Zettelkasten distinction, not just naming. Three vertex types, each carrying an `authored_by: model | user` provenance field rather than splitting into separate types per authorship — reuses the same pending/confirm/override UX already built for edges, no new pattern per type:
+Real Zettelkasten distinction, not just naming — and not a uniform rule across all three types. `Item` and `SummaryCard` are *information transformation* (extract, summarize, roll up existing material) — AI doing this well doesn't undercut the method. `PermanentNote` is different: the value of a permanent note is the human forming the idea in their own words: that's the cognitive work the whole method is built around, so it's user-authored only, no model draft state.
 
-- **Literature note** (`Item`) — source-bound, extracted/summarized in relation to its source.
+- **Literature note** (`Item`) — source-bound, extracted/summarized in relation to its source. Carries `authored_by: model | user`.
   - `authored_by: model` — the default: ingestion agent extracts/summarizes on ingest, auto-written, no confidence gate (it's an extraction, not a claim).
   - `authored_by: user` — user writes/replaces the note directly instead of accepting the agent's extraction.
   - `edited_by_user: bool` flags a model-authored note that was later hand-edited (hybrid provenance).
-- **Idea** (`PermanentNote`) — atomic, in the user's own words, decontextualized.
-  - `authored_by: model` ("model-derived idea") — agent notices a pattern across items and proposes a permanent note. Always `status: draft` until the user confirms.
-  - `authored_by: user` ("my idea") — user writes their own idea from scratch; `status: confirmed` immediately, no gate needed since it's already theirs.
-  - **Critical rule unchanged:** agent never auto-*creates* a confirmed permanent note. It *proposes* (e.g., "these 4 items keep pointing at the same idea — draft a permanent note?"), user edits/confirms.
-- **Summary card** (`SummaryCard`, new vertex type) — a cluster-synthesis rollup spanning multiple items/ideas (e.g. output of the SWOT/analysis agent), distinct from a single-source literature note.
-  - `authored_by: model` ("model-derived summary card") — the common case: analysis agent synthesizes a cluster, staged `status: draft` pending user confirm, same gate as model-derived ideas.
+- **Idea** (`PermanentNote`) — atomic, in the user's own words, decontextualized. **Always user-authored — no `authored_by` field, no draft state.**
+  - **Critical rule:** the agent never creates a `PermanentNote` vertex. It only *suggests*, via `handoff_to_user` (e.g. "these 4 items keep pointing at the same idea — want to write a permanent note?"), optionally seeded with starting text to lower the blank-page barrier. Nothing reaches Neptune until the user reviews, edits, and saves it themselves — the suggestion is UI-only, never a graph write.
+- **Summary card** (`SummaryCard`) — a cluster-synthesis rollup spanning multiple items/ideas (e.g. output of the SWOT/analysis agent), distinct from a single-source literature note. Carries `authored_by: model | user`.
+  - `authored_by: model` ("model-derived summary card") — the common case: analysis agent synthesizes a cluster, staged `status: draft` pending user confirm, reusing the same pending/confirm/override UX already built for edges.
   - `authored_by: user` — user assembles or edits a rollup card manually.
 
 **Linkages** — no new edge types needed; widen which vertex types the two existing distillation edges connect:

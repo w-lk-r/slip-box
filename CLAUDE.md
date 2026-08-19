@@ -123,13 +123,11 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 
 ### Note taxonomy: literature notes, ideas, summary cards (stretch)
 
-Three vertex types, each carrying an `authored_by: model | user` provenance field rather than splitting into separate types per authorship:
+Not a uniform rule across all three: `Item` and `SummaryCard` are information transformation (AI doing this well doesn't undercut the method) and carry `authored_by: model | user`; `PermanentNote` is where the human forming the idea in their own words is the actual point, so it's user-authored only.
 
 - `Item` = literature note (source-bound). `authored_by: model` is the default (ingestion agent extraction, auto-written, no gate); `authored_by: user` when the user writes/replaces it directly. `edited_by_user: bool` flags a model note later hand-edited.
-- `PermanentNote` = idea, atomic, decontextualized. `authored_by: model` ("model-derived idea") is always `status: draft` until confirmed; `authored_by: user` ("my idea") is `status: confirmed` immediately. Agent never auto-creates a confirmed permanent note — it proposes, user confirms.
-- `SummaryCard` = cluster-synthesis rollup spanning multiple items/ideas (SWOT/analysis agent output). `authored_by: model` ("model-derived summary card") stages `status: draft` pending confirm, same as model-derived ideas; `authored_by: user` for a manually assembled rollup.
-
-All three reuse the same pending/confirm/override UX and append-only `history` log as edges — no new pattern per type.
+- `PermanentNote` = idea, atomic, decontextualized. **Always user-authored — no `authored_by` field, no draft state.** Agent never creates a `PermanentNote` vertex; it only suggests via `handoff_to_user` (optionally seeded with starting text), and nothing reaches Neptune until the user writes/edits/saves it themselves.
+- `SummaryCard` = cluster-synthesis rollup spanning multiple items/ideas (SWOT/analysis agent output). `authored_by: model` ("model-derived summary card") stages `status: draft` pending confirm, reusing the same pending/confirm/override UX as edges; `authored_by: user` for a manually assembled rollup.
 
 **Linkages** — no new edge types; widen the existing distillation edges' allowed vertex types instead:
 - `DISTILLED_INTO`: `Item | PermanentNote` → `PermanentNote | SummaryCard`
