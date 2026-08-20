@@ -125,6 +125,41 @@ to it the same way any directly-ingested note would —
 in `CLAUDE.md` (`Item → Source`) to keep "the user gave me this" distinct
 from "I went and found this."
 
+## 8. Multi-agent split shouldn't be a routing supervisor — dispatch by endpoint instead
+
+`CLAUDE.md`'s four-agent table (Ingestion / Classification / Research /
+SWOT) implies something needs to decide which agent handles a request. It
+shouldn't be an LLM router: the MVP UI (`Ingest` / `Pending edge review` /
+`Graph view` screens, `/ingest`, `/pending-edges`, `/edges/{id}`, `/graph`)
+already disambiguates intent at the FastAPI-route level, so an LLM
+re-deciding "which agent should handle this" on top of that is redundant
+latency, cost, and a new misrouting failure mode for zero benefit.
+
+Map dispatch directly to call sites instead of routing through a supervisor:
+- `POST /ingest` (with an explicit `research: bool` from the UI, not
+  inferred by an agent) → ingestion agent directly.
+- "Find more connections" button on a `PermanentNote` → classification agent
+  directly.
+- 4+ notes converge in `search_notes` results → **not an agent decision at
+  all**, just a count check in the ingestion flow that calls `write_summary`
+  (`if len(matches) >= 4`).
+- On-demand "summarise my notes on X" → summary agent directly, if it's its
+  own UI action rather than free text.
+
+The one place a routing supervisor would still earn its keep is a genuine
+free-text omnibox (paste a URL, ask a question, request a summary, all in
+one box with no UI pre-categorization) — none of the three MVP screens
+obviously have one; confirm with whoever owns the frontend before building
+a router for a case that may not exist.
+
+Separately, "specific agent entry points" has a deployment-shape question to
+settle before building: separate system prompts sharing one AgentCore
+Runtime entrypoint (current shape — cheap, one deploy, shared session
+cache) vs. actually separate AgentCore-hosted agents per flow (`agentcore
+add agent` per route — matches the "four separate Strands agents" framing
+literally, isolates blast radius/scaling/cost per flow, but means N cold
+starts and N deploy surfaces instead of one).
+
 ---
 
 *Recommended order: #1 unblocks #2 and is the app's core value prop. #3 and
@@ -132,4 +167,6 @@ from "I went and found this."
 hammer flat-string sourcing hardest (N duplicate unstructured `source_url`
 strings per run, no dedup) and is the first caller that actually needs
 PDF/YouTube-aware fetching. #4–#5 are independent metadata/provenance
-polish.*
+polish. #8 is a structural decision worth settling before #1 and #7 are
+built, since it determines whether classification/research land as
+in-process Agent-as-Tool calls or standalone AgentCore agents.*
