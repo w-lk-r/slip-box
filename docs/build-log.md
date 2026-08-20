@@ -55,9 +55,18 @@ Chronological record of decisions and progress.
 
 **Decision (Aug 20):** PermanentNote write path bypasses the agent entirely (frontend → FastAPI → S3 + DynamoDB). Two authoring paths: **selection-first** (recommended) — user selects literature notes before writing, they appear in a reference panel alongside the editor, `GROUNDED_IN` edges written from selection on save (`authored_by: user`); **raw write** — user writes without pre-selecting, edges added manually or via agent afterward. Both paths support optional "Find more connections" post-save to let the classification agent propose additional edges (`authored_by: model`, additive only). Reference panel is the same component as the lit-note excerpts sidebar — just triggered pre-save.
 
+- Refactored `main.py` — tools extracted to `tools/notes.py` (self-contained with own clients); `main.py` slim to entrypoint, system prompt, agent factory only
+- `write_note` now writes to DynamoDB `items` table alongside S3
+- Added `write_summary` tool — creates `summary-card` notes; auto-triggered when agent finds 4+ converging notes post-search; on-demand on user request; written immediately, no draft
+- Added `update_summary` tool — adds/removes notes from existing cluster, regenerates S3 frontmatter preserving body; supports overlapping clusters
+- System prompt updated with cluster detection rules
+- `scripts/backfill_items.py` — idempotent backfill of 7 existing S3 notes into DynamoDB
+- Confirmed end-to-end: summary card created, written to S3 + DynamoDB, `grounded_in` all 7 source notes, synthesis quality strong
+
+---
+
 ## Up Next
 
-- [ ] Provision DynamoDB — `items` table + `edges` table
-- [ ] Build classification agent — proposes typed edges with confidence scores; writes edges ≥ threshold; drops below threshold; runs on both new literature notes and newly saved permanent notes
-- [ ] FastAPI backend — `/ingest`, `/notes` (permanent note write), `/edges/{id}` (edit/delete), `/graph` endpoints
-- [ ] Next.js frontend — two MVP screens: Ingest + permanent note editor, Graph view (inline edge editing)
+- [ ] Classification agent — proposes typed edges (SUPPORTS/CONTRADICTS/EXTENDS/RELATED_TO/GROUNDED_IN) with confidence scores; writes edges ≥ `EDGE_CONFIDENCE_THRESHOLD` to DynamoDB `edges` table; drops below threshold; runs after new literature notes and after new permanent notes are saved
+- [ ] FastAPI backend — `/ingest`, `/notes` (permanent note write), `/edges/{id}` (edit/delete), `/graph`, `/items` (list all notes) endpoints
+- [ ] Next.js frontend — two MVP screens: Ingest + permanent note editor (selection-first flow), Graph view with collapsible summary card clusters and inline edge editing
