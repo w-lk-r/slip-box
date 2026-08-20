@@ -145,7 +145,13 @@ Not a uniform rule across all three: `Item` and `SummaryCard` are information tr
   - **Alternative path (raw write):** user opens a blank editor and writes directly without pre-selecting. Edges can be added manually after, or via "Find more connections."
   - In both cases: optional "Find more connections" button triggers the classification agent post-save to propose additional `RELATED_TO` / `GROUNDED_IN` edges the user didn't explicitly choose. Agent edges are `authored_by: model`, additive only — never removes or overwrites user-created edges.
   - The reference panel showing selected lit notes while writing is the same component as the literature excerpts sidebar, just triggered pre-save rather than post.
-- `SummaryCard` = cluster-synthesis rollup spanning multiple items/ideas (SWOT/analysis agent output). `authored_by: model` ("model-derived summary card") stages `status: draft` pending confirm, reusing the same pending/confirm/override UX as edges; `authored_by: user` for a manually assembled rollup.
+- `SummaryCard` = cluster-synthesis rollup spanning multiple items/ideas. `authored_by: model` or `authored_by: user`. Written immediately — no draft state. User deletes if unwanted.
+  - **Automatic trigger:** after KB search post-ingestion, if 4+ existing notes converge on the same core idea, the ingestion agent writes a summary card grounding it in those notes.
+  - **Add to existing cluster:** if a new note belongs to an existing summary card found in search results, agent calls `update_summary` to add it rather than creating a new card.
+  - **Overlapping clusters:** a note can belong to multiple summary cards — `update_summary` is called for each. In the graph, a note in two clusters renders as a bridge node between them when both are collapsed, making conceptual bridges visible.
+  - **On-demand:** user asks "summarise my notes on X" — agent searches, synthesises, writes.
+  - **Graph role:** summary cards are collapsible cluster nodes. `grounded_in` note_ids define cluster membership. Collapsed = one node with edges routing through it; expanded = individual notes visible with summary card as hub. Prevents the graph growing into a hairball as the corpus grows.
+  - **Cluster editing:** user can add/remove notes from a cluster via the graph UI (drag in/out), which calls `update_summary` via FastAPI.
 
 **Linkages** — no new edge types; widen the existing distillation edges' allowed vertex types instead:
 - `DISTILLED_INTO`: `Item | PermanentNote` → `PermanentNote | SummaryCard`

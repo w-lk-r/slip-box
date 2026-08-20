@@ -25,9 +25,11 @@ Runtime deps are in `pyproject.toml`. The `.env` file (gitignored) holds local c
 
 | Tool | Purpose |
 |---|---|
-| `write_note` | Writes `.md` + `.md.metadata.json` sidecar to S3 |
+| `write_note` | Writes `.md` + sidecar to S3, record to DynamoDB `items` |
+| `write_summary` | Writes a `summary-card` note grounding a cluster of note_ids |
+| `update_summary` | Adds/removes notes from an existing summary card's cluster |
 | `search_notes` | Semantic retrieval against `SlipCaseKB` |
 | `trigger_kb_sync` | Starts KB ingestion job so new notes become searchable |
 | `fetch_url` | Fetches and strips URL content for ingestion |
 
-Always call `trigger_kb_sync` after one or more `write_note` calls.
+Always call `trigger_kb_sync` after one or more `write_note` or `write_summary` calls.

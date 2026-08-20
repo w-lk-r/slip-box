@@ -22,6 +22,14 @@ aws s3 sync s3://slip-box-notes/ ~/ObsidianVault/SlipBox/
 
 ---
 
+## S3 Vectors as KB replacement
+
+Amazon S3 Vectors (launched 2025) stores vector embeddings directly in S3 buckets — same bucket, same `.md` files, vectors stored alongside them. Potentially cheaper at scale than Bedrock Knowledge Base, and keeps everything in one place.
+
+The migration path is clean: call the Bedrock Embeddings API on each `write_note`, store the vector in S3 Vectors, query it for semantic search instead of the KB. The `.md` files don't move. Worth revisiting post-hackathon once S3 Vectors matures and pricing is clearer vs the KB.
+
+---
+
 ## Instagram / TikTok Reel Ingestion
 
 Support short-form video content as a source type.
