@@ -9,6 +9,7 @@
     "watch": "tsc -w",
     "test": "jest",
     "cdk": "npm run build && cdk",
+    "deploy:app": "npm run build && cdk deploy \"SlipBox-App-*\" --require-approval never",
     "clean": "rm -rf dist",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

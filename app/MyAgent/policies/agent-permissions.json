@@ -33,6 +33,23 @@
         "bedrock-agent:ListDataSources"
       ],
       "Resource": "arn:aws:bedrock:ap-southeast-2:690445895420:knowledge-base/EHSL8ZENQX"
+    },
+    {
+      "Sid": "DynamoDB",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:PutItem",
+        "dynamodb:GetItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-items",
+        "arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-edges",
+        "arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-edges/index/to_id-index"
+      ]
     }
   ]
 }

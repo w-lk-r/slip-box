@@ -13,6 +13,7 @@ from strands import Agent, tool
 from strands.agent.conversation_manager.null_conversation_manager import NullConversationManager
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from model.load import load_model
+from config import FETCH_URL_MAX_CHARS, KB_RETRIEVE_TOP_K, SESSION_CACHE_SIZE
 
 load_dotenv()
 
@@ -125,7 +126,7 @@ def search_notes(query: str) -> list[dict]:
     response = bedrock_runtime.retrieve(
         knowledgeBaseId=KB_ID,
         retrievalQuery={"text": query},
-        retrievalConfiguration={"managedSearchConfiguration": {"numberOfResults": 10}},
+        retrievalConfiguration={"managedSearchConfiguration": {"numberOfResults": KB_RETRIEVE_TOP_K}},
     )
     return [
         {
@@ -171,7 +172,7 @@ def fetch_url(url: str) -> str:
         response.raise_for_status()
         text = re.sub(r'<[^>]+>', ' ', response.text)
         text = re.sub(r'\s+', ' ', text).strip()
-        return text[:50000]
+        return text[:FETCH_URL_MAX_CHARS]
 
 
 tools = [write_note, search_notes, trigger_kb_sync, fetch_url]
@@ -184,7 +185,7 @@ def agent_factory():
         if session_id in cache:
             cache.move_to_end(session_id)
             return cache[session_id]
-        if len(cache) >= 128:
+        if len(cache) >= SESSION_CACHE_SIZE:
             cache.popitem(last=False)
         cache[session_id] = Agent(
             model=load_model(),

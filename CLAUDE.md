@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Slip Box is a multi-agent "second brain" built with the AWS Strands Agents SDK and hosted on AgentCore Runtime. It ingests sources (articles, YouTube, PDF, plain text), classifies typed relationships between them (SUPPORTS / CONTRADICTS / EXTENDS), and maintains a graph of those connections in Amazon Neptune. Ambiguous edges are confidence-gated and routed to the user via `handoff_to_user` rather than written automatically.
+Slip Box is a multi-agent "second brain" built with the AWS Strands Agents SDK and hosted on AgentCore Runtime. It ingests sources (articles, YouTube, PDF, plain text), classifies typed relationships between them (SUPPORTS / CONTRADICTS / EXTENDS), and maintains a graph of those connections in Amazon Neptune. All edges are auto-written; confidence score is stored as metadata and surfaced visually in the graph (low-confidence edges render differently) so the user can correct anything they disagree with.
 
 Full design rationale is in [`docs/hackathon-brief.md`](docs/hackathon-brief.md). AgentCore config and CLI reference is in [`AGENTS.md`](AGENTS.md).
 
@@ -36,8 +36,12 @@ AWS credentials must have Bedrock model invocation permissions.
 # Local development (hot-reload + browser inspector)
 agentcore dev
 
-# Deploy to AWS
+# Deploy agent code + AgentCore resources
 agentcore deploy
+
+# Deploy application infrastructure (S3, DynamoDB, Neptune later)
+# Run from agentcore/cdk/ — builds TypeScript then deploys SlipBox-App-* stack
+cd agentcore/cdk && npm run deploy:app
 
 # Invoke deployed agent
 agentcore invoke --prompt "Hello"
@@ -49,7 +53,9 @@ agentcore validate
 agentcore add <resource>
 ```
 
-Run these from the repo root. The agentcore CLI reads `agentcore/agentcore.json` for config.
+Run agentcore commands from the repo root. The agentcore CLI reads `agentcore/agentcore.json` for config.
+
+`npm run deploy:app` compiles TypeScript then deploys the `SlipBox-App-*` stack. npm scripts automatically resolve `cdk` from `node_modules/.bin`, so no global CDK install is needed.
 
 ## Agent Code
 
@@ -82,30 +88,31 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 
 ### Two-tier ingestion
 
-- **Default path:** ingest → write `.md` to S3 → trigger KB sync → semantic retrieval → classification → confidence gate → write to DynamoDB + Neptune
+- **Default path:** ingest → write `.md` to S3 → trigger KB sync → semantic retrieval → classification → write to DynamoDB + Neptune
 - **`--research` flag:** same, but triggers the research agent to fan out before classification
 
-### Confidence gating
+### Confidence and edge correction
 
-- Classification agent scores each proposed edge with a confidence value.
-- **≥70% (configurable)** → auto-written, `status: auto`
-- **<70%** → staged as `pending` in DynamoDB, surfaced to user via Strands `handoff_to_user`
-- All edges support override; append-only `history` log per edge for provenance.
-- Use `handoff_to_user` from the Strands SDK — do not build custom pause/resume logic.
+- Classification agent scores each proposed edge with a confidence value (0–1).
+- **Threshold (`EDGE_CONFIDENCE_THRESHOLD` in `app/MyAgent/config.py`, default 0.65):** edges at or above threshold are written to Neptune; edges below are dropped entirely — no queue, no noise.
+- Confidence is stored as metadata on the Neptune edge and in the `.md.metadata.json` sidecar.
+- In the graph view, edges near the threshold render differently (dashed line / muted colour) so the user can spot and correct anything they disagree with inline.
+- All edges are user-editable/deletable from the graph view; append-only `history` log per edge for provenance.
+- To re-examine dropped connections, the user can ask the agent "what else is this connected to?" and classification reruns on demand.
 
 **Connections live on the card, matching the original method** (Luhmann's notes carried references to other notes on the card itself, not in a separate index):
-- `auto`/confirmed connections are written into the note's own frontmatter (not the body) as typed link lists (`supports`, `contradicts`, `extends`, `related_to`) using `[[wikilinks]]`, so Obsidian's graph/backlinks picks them up. Regenerated from Neptune's current edge state on every change, never appended. Body stays pure prose; frontmatter is system-generated — no clobbering risk.
+- Connections are written into the note's own frontmatter (not the body) as typed link lists (`supports`, `contradicts`, `extends`, `related_to`) using `[[wikilinks]]`, so Obsidian's graph/backlinks picks them up. Regenerated from Neptune's current edge state on every change, never appended. Body stays pure prose; frontmatter is system-generated — no clobbering risk.
 - Excluded from KB embedding like the rest of frontmatter; mirrored into `.md.metadata.json` for KB filtering.
 - **Neptune stays the source of truth for the graph** — S3 is source of truth for note content, frontmatter connections are a generated reflection, never authored directly.
-- **Stretch:** pending connections also appear in frontmatter (`status: pending`), making the note a second review surface — an S3 edit synced back triggers a Lambda that calls the same accept/reject function the review UI uses. Build after the MVP review UI is solid.
 
 ### Storage
 
 - **S3** — source of truth. Each ingested item is written as an atomic `.md` file with YAML frontmatter (source, date, confidence scores, relationship metadata). Human-readable, portable, enables Obsidian sync via `aws s3 sync`.
 - **Bedrock Knowledge Base** — syncs from S3, creates embeddings for semantic retrieval. Indefinite persistence (no expiry). Replaces AgentCore Memory which has a hard 365-day cap incompatible with a permanent second brain.
-  - Write a `.md.metadata.json` sidecar next to each `.md` file so frontmatter is indexed as filterable metadata, not embedded inline with the note body — keeps embeddings semantic rather than diluted with metadata text.
+  - The `.md.metadata.json` sidecar is a **Bedrock KB requirement**, not an application choice — the KB reads it during S3 sync to treat those fields (type, source, date, tags) as filterable metadata rather than embedding them as content. Without it, frontmatter bleeds into the embedding and degrades retrieval. The KB cannot read DynamoDB; the sidecar cannot be eliminated.
+  - Keep the sidecar minimal: only the fields the KB needs for filtering. Full metadata lives in DynamoDB.
   - Use hierarchical/semantic chunking (not default fixed-size) for longer literature notes so retrieval doesn't cut mid-section.
-- **DynamoDB** — `items` table (structured metadata per ingested item) and `pending_edges` table (confidence-gated edges awaiting review)
+- **DynamoDB** — `items` table (structured metadata for all note types: `literature-note`, `permanent-note`) and `edges` table (`from_id`, `to_id`, `type`, `confidence`, `history`). Neptune is the production graph target but DynamoDB covers all MVP query needs (write edge, read edges by node, read all edges for graph render) without VPC complexity.
 - **Amazon Neptune** — graph DB for typed edges. Vertex types: `Item`, `Concept`, `PermanentNote`, `SummaryCard` (stretch — see Note taxonomy below), `Source`. Every vertex carries `created_at`/`updated_at` — powers the timeline/MOC view (see Frontend below). Edge types: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`
 
 ### Hosting
@@ -133,7 +140,11 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 Not a uniform rule across all three: `Item` and `SummaryCard` are information transformation (AI doing this well doesn't undercut the method) and carry `authored_by: model | user`; `PermanentNote` is where the human forming the idea in their own words is the actual point, so it's user-authored only.
 
 - `Item` = literature note (source-bound). `authored_by: model` is the default (ingestion agent extraction, auto-written, no gate); `authored_by: user` when the user writes/replaces it directly. `edited_by_user: bool` flags a model note later hand-edited.
-- `PermanentNote` = idea, atomic, decontextualized. **Always user-authored — no `authored_by` field, no draft state.** Agent never creates a `PermanentNote` vertex; it only suggests via `handoff_to_user` (optionally seeded with starting text), and nothing reaches Neptune until the user writes/edits/saves it themselves.
+- `PermanentNote` = idea, atomic, decontextualized. **Always user-authored — no `authored_by` field, no draft state.** Agent never creates a `PermanentNote` vertex or writes to its body. Write path is direct: frontend → FastAPI → S3 + DynamoDB + KB sync trigger (no agent in the loop).
+  - **Recommended path (selection-first):** user browses graph/note list and clicks literature notes to select them as the basis before writing. Selected notes appear in a reference panel alongside the editor — the act of selecting and reading IS the thinking. On save, `GROUNDED_IN` edges are written automatically from the selection (`authored_by: user`). Mirrors Luhmann pulling physical notes onto the desk before writing.
+  - **Alternative path (raw write):** user opens a blank editor and writes directly without pre-selecting. Edges can be added manually after, or via "Find more connections."
+  - In both cases: optional "Find more connections" button triggers the classification agent post-save to propose additional `RELATED_TO` / `GROUNDED_IN` edges the user didn't explicitly choose. Agent edges are `authored_by: model`, additive only — never removes or overwrites user-created edges.
+  - The reference panel showing selected lit notes while writing is the same component as the literature excerpts sidebar, just triggered pre-save rather than post.
 - `SummaryCard` = cluster-synthesis rollup spanning multiple items/ideas (SWOT/analysis agent output). `authored_by: model` ("model-derived summary card") stages `status: draft` pending confirm, reusing the same pending/confirm/override UX as edges; `authored_by: user` for a manually assembled rollup.
 
 **Linkages** — no new edge types; widen the existing distillation edges' allowed vertex types instead:

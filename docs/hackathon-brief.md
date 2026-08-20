@@ -14,20 +14,19 @@ A "second brain" / Zettelkasten-inspired research agent. You send it sources (ar
 - **Default (no flag):** send item → embed → auto-match against existing corpus → fast, cheap, always-on. This is the MVP backbone.
 - **`--research` flag:** same ingestion, but triggers outward research (search + fetch related/contradicting sources), builds a small sub-corpus around the item, analyzes it (optionally SWOT-style), then folds the richer cluster into the graph. Slower, deliberate, shows off agentic depth.
 
-## Confidence-Gated Connections
+## Confidence-Filtered Connections
 
 - Agent classifies proposed edge type (SUPPORTS/CONTRADICTS/EXTENDS) with a confidence score.
-- **≥70% confidence** → auto-written to the graph (`status: auto`).
-- **<70% confidence** → staged as `pending`, surfaced to user for review (accept/reject) rather than written immediately.
-- **All edges are changeable after the fact** — user can override any edge (auto or confirmed), full change history retained in an append-only `history` log per edge, for provenance/demo purposes.
-- Build using Strands' native `handoff_to_user` tool for the pause/resume pattern rather than custom logic — reads better in code review.
-- 70% threshold should be a config value, not hardcoded — tune once real classification-prompt confidence distribution is observed.
+- **≥ threshold** → written to Neptune automatically.
+- **< threshold** → dropped entirely — no queue, no noise in the graph.
+- Threshold lives in `app/MyAgent/config.py` (`EDGE_CONFIDENCE_THRESHOLD = 0.65`) — tune once real classification output is observed, not before.
+- **All edges are user-editable/deletable** from the graph view after the fact; append-only `history` log per edge for provenance.
+- In the graph view, edges near the threshold render visually differently (dashed / muted) so the user can spot and correct anything they disagree with inline. To re-examine dropped connections, the user can ask the agent directly ("what else is this connected to?") and classification reruns on demand.
 
 **Connections live on the card, matching the original method.** Luhmann's slip-box notes carried explicit references to other notes, written on the card itself — not in a separate index. Reflecting that:
-- `auto`/confirmed connections are written into the note's own **frontmatter** (not the body) as typed link lists — `supports: ["[[item-1234]]"]`, `contradicts: [...]`, `extends: [...]`, `related_to: [...]` — using `[[wikilinks]]` so Obsidian's native graph/backlinks picks them up. Regenerated from Neptune's current edge state on every change, never appended, so the file can't drift out of sync. Body stays pure prose (user/model-authored); frontmatter stays system-generated — no risk of a sync process clobbering hand-written text.
+- Connections are written into the note's own **frontmatter** (not the body) as typed link lists — `supports: ["[[item-1234]]"]`, `contradicts: [...]`, `extends: [...]`, `related_to: [...]` — using `[[wikilinks]]` so Obsidian's native graph/backlinks picks them up. Regenerated from Neptune's current edge state on every change, never appended, so the file can't drift out of sync. Body stays pure prose; frontmatter stays system-generated — no risk of a sync process clobbering hand-written text.
 - Excluded from KB embedding (same principle as the rest of frontmatter) — mirrored into `.md.metadata.json` instead, so Bedrock KB can filter by connection without diluting semantic retrieval.
 - **Neptune stays the source of truth for the graph.** S3 remains source of truth for note *content*; the frontmatter connections are a generated reflection, never authored directly.
-- **Stretch:** pending connections also appear in frontmatter (`status: pending` vs. `auto`/`confirmed`), making the note itself a second review surface. Editing a connection's status in a synced note and pushing via `aws s3 sync` triggers an S3 event → Lambda parses the frontmatter diff → calls the *same* accept/reject function the Pending Edge Review UI uses — reuses existing logic rather than duplicating it. Frontmatter-diffing for reliable intent (accept vs. reject vs. a stale local edit) is real edge-case work; build after the MVP review UI is solid, not alongside it.
 
 ## Note Taxonomy: Literature Notes, Ideas, and Summary Cards (stretch feature)
 
@@ -38,7 +37,11 @@ Real Zettelkasten distinction, not just naming — and not a uniform rule across
   - `authored_by: user` — user writes/replaces the note directly instead of accepting the agent's extraction.
   - `edited_by_user: bool` flags a model-authored note that was later hand-edited (hybrid provenance).
 - **Idea** (`PermanentNote`) — atomic, in the user's own words, decontextualized. **Always user-authored — no `authored_by` field, no draft state.**
-  - **Critical rule:** the agent never creates a `PermanentNote` vertex. It only *suggests*, via `handoff_to_user` (e.g. "these 4 items keep pointing at the same idea — want to write a permanent note?"), optionally seeded with starting text to lower the blank-page barrier. Nothing reaches Neptune until the user reviews, edits, and saves it themselves — the suggestion is UI-only, never a graph write.
+  - **Write path bypasses the agent entirely:** frontend → FastAPI → S3 + DynamoDB + KB sync trigger. The agent never writes to the note body.
+  - **Recommended path (selection-first):** user selects literature notes from the graph/list before opening the editor. Selected notes appear in a reference panel alongside the writing surface — reading them IS part of the thinking. On save, `GROUNDED_IN` edges are written from the selection automatically (`authored_by: user`). Mirrors Luhmann pulling physical notes onto the desk before writing. This is the primary UX, not the only one.
+  - **Alternative path (raw write):** user writes without pre-selecting. Edges can be added manually afterward or via "Find more connections."
+  - In both cases: optional "Find more connections" triggers the classification agent post-save to propose additional edges the user didn't explicitly choose — `authored_by: model`, additive only, never overwrites user edges. Same confidence threshold applies.
+  - The reference panel (selected notes alongside editor) is the same component as the literature excerpts sidebar — triggered pre-save rather than post.
 - **Summary card** (`SummaryCard`) — a cluster-synthesis rollup spanning multiple items/ideas (e.g. output of the SWOT/analysis agent), distinct from a single-source literature note. Carries `authored_by: model | user`.
   - `authored_by: model` ("model-derived summary card") — the common case: analysis agent synthesizes a cluster, staged `status: draft` pending user confirm, reusing the same pending/confirm/override UX already built for edges.
   - `authored_by: user` — user assembles or edits a rollup card manually.
@@ -62,10 +65,10 @@ Same append-only `history` log and pending/confirm/override UX as edges — auth
 **Storage:**
 - **S3** — primary document store. Each ingested item written as an atomic `.md` file with YAML frontmatter. Human-readable, portable, enables Obsidian sync via `aws s3 sync`. Indefinite persistence.
 - **Bedrock Knowledge Base** — syncs from S3, creates embeddings for semantic retrieval. Replaces AgentCore Memory. No expiry, better retrieval control, and notes remain accessible as plain `.md` files independent of the KB.
-  - **Frontmatter stays out of the embedded text.** Write a `.md.metadata.json` sidecar alongside each `.md` file (Bedrock KB's supported pattern) carrying source, date, confidence scores, and relationship metadata as filterable fields. Only the note body gets embedded — frontmatter inline in the body would dilute the embedding with metadata noise instead of semantic content.
+  - **The `.md.metadata.json` sidecar is a Bedrock KB requirement**, not an application choice. The KB reads it during S3 sync to treat fields (type, source, date, tags) as filterable metadata rather than embedding them as semantic content. Without it, frontmatter bleeds into embeddings and degrades retrieval. The KB cannot read DynamoDB; the sidecar cannot be removed. Keep it minimal — only what the KB needs for filtering. Full metadata lives in DynamoDB.
   - **Chunking strategy is deliberate, not default fixed-size.** Use hierarchical or semantic chunking for literature notes (longer, source-bound) so retrieval returns coherent sections instead of mid-thought cuts. Short atomic `PermanentNote`s will mostly embed as a single chunk regardless, which is fine.
   - Get this right from the start of MVP step 1 — retrofitting the sidecar/chunking pattern later means a full KB re-sync.
-- **DynamoDB** — `items` table: structured metadata per ingested item (id, source, S3 key, mode, status, summary, SWOT, cluster_id). Also `pending_edges` table.
+- **DynamoDB** — `items` table: structured metadata for all note types (`literature-note`, `permanent-note`). `edges` table: (`from_id`, `to_id`, `type`, `confidence`, `history`) — covers all MVP graph query needs without VPC complexity. Neptune is the production target for the full graph but not needed for the demo.
 - **Amazon Neptune (graph DB)** — the actual connections model. Vertices: `Item`, `Concept`, `PermanentNote`, `SummaryCard` (stretch — see Note Taxonomy below), `Source`. Every vertex carries `created_at`/`updated_at` — not just incidental metadata, it's what powers the timeline/MOC view below. Typed edges: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`. Chosen over pure vector search because the product is literally about a graph of typed relationships — more visible/demoable design choice than nearest-neighbor lookup.
 - (Alternative considered: OpenSearch Serverless for custom vector control; S3 Vectors for cheapest/simplest. Neptune preferred for the graph-native fit.)
 
@@ -80,8 +83,8 @@ Same append-only `history` log and pending/confirm/override UX as edges — auth
 
 **Frontend:**
 - **Next.js / TypeScript** (chosen over FastAPI+HTMX/Streamlit/Reflex — lower risk given existing fluency, better UI ceiling for Design scoring).
-- **FastAPI** as the backend layer between Next.js and AWS — exposes `/ingest`, `/pending-edges`, `/edges/{id}` (accept/reject/override), `/graph`; invokes Strands agents on AgentCore Runtime, reads/writes DynamoDB + Neptune.
-- Three MVP screens: **Ingest** (form + `--research` toggle), **Review queue** (pending edges, accept/reject/override cards), **Graph view** (node-link graph, color-coded by edge type — the demo payoff shot). Suggested libs: react-force-graph (speed) or Cytoscape.js (finer edge-label control).
+- **FastAPI** as the backend layer between Next.js and AWS — exposes `/ingest`, `/edges/{id}` (edit/delete), `/graph`; invokes Strands agents on AgentCore Runtime, reads/writes DynamoDB + Neptune.
+- Two MVP screens: **Ingest** (form + `--research` toggle), **Graph view** (node-link graph, color-coded by edge type, low-confidence edges rendered differently — the demo payoff shot). Suggested libs: react-force-graph (speed) or Cytoscape.js (finer edge-label control).
   - **Timeline mode (stretch)** — same node/edge data for a MOC's linked notes or a note's neighborhood, laid out along a time axis (by `created_at`) instead of force-directed, replaying the order ideas were actually connected. A rendering toggle on top of existing graph data, not a new backend concept.
 - Hosting: AWS Amplify Hosting (keeps AWS-native story consistent) or Vercel.
 
@@ -92,7 +95,7 @@ Same append-only `history` log and pending/confirm/override UX as edges — auth
 
 ## Scope: MVP vs. Stretch
 
-- **MVP:** ingest (URL/text/PDF/YouTube transcript) → embed → auto-link (confidence gate) → pending-edge review → basic graph view.
+- **MVP:** ingest (URL/text/PDF/YouTube transcript) → embed → auto-link (threshold filter) → basic graph view with inline edge editing.
 - **Stretch:** `--research` flag fan-out, SWOT analysis, literature/permanent note promotion, frontmatter as a pending-connection review surface.
 - Build MVP fully solid first — it's the demo safety net — before investing in stretch features.
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { AgentCoreStack, type HarnessConfig } from '../lib/cdk-stack';
+import { AppStack } from '../lib/app-stack';
 import { ConfigIO, HarnessSpecSchema, type AwsDeploymentTarget } from '@aws/agentcore-cdk';
 import { App, type Environment } from 'aws-cdk-lib';
 import * as path from 'path';
@@ -174,6 +175,15 @@ async function main() {
       paymentSpec,
       env,
       description: `AgentCore stack for ${spec.name} deployed to ${target.name} (${target.region})`,
+      tags: {
+        'agentcore:project-name': spec.name,
+        'agentcore:target-name': target.name,
+      },
+    });
+
+    new AppStack(app, `SlipBox-App-${sanitize(target.name)}`, {
+      env,
+      description: `Slip Box application infrastructure (S3, DynamoDB) for ${target.name}`,
       tags: {
         'agentcore:project-name': spec.name,
         'agentcore:target-name': target.name,
