@@ -13,8 +13,15 @@
     {
       "Sid": "KBRetrieve",
       "Effect": "Allow",
-      "Action": ["bedrock:Retrieve", "bedrock-agent-runtime:Retrieve"],
-      "Resource": "arn:aws:bedrock:ap-southeast-2:690445895420:knowledge-base/EHSL8ZENQX"
+      "Action": [
+        "bedrock:Retrieve",
+        "bedrock-agent-runtime:Retrieve",
+        "bedrock-agent-runtime:RetrieveAndGenerate"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:ap-southeast-2:690445895420:knowledge-base/EHSL8ZENQX",
+        "arn:aws:bedrock:ap-southeast-2:690445895420:knowledge-base/EHSL8ZENQX/*"
+      ]
     },
     {
       "Sid": "KBIngest",
