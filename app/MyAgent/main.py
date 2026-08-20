@@ -125,7 +125,7 @@ def search_notes(query: str) -> list[dict]:
     response = bedrock_runtime.retrieve(
         knowledgeBaseId=KB_ID,
         retrievalQuery={"text": query},
-        retrievalConfiguration={"vectorSearchConfiguration": {"numberOfResults": 5}},
+        retrievalConfiguration={"managedSearchConfiguration": {"numberOfResults": 5}},
     )
     return [
         {
