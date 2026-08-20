@@ -160,6 +160,46 @@ add agent` per route — matches the "four separate Strands agents" framing
 literally, isolates blast radius/scaling/cost per flow, but means N cold
 starts and N deploy surfaces instead of one).
 
+## 9. DynamoDB has no reconciliation path for edits made directly in S3/KB
+
+DynamoDB `items` is only ever written by `write_note` and `update_summary`
+— nothing observes S3 for changes, so any edit made outside those two tools
+(Obsidian sync after `aws s3 sync`, a direct S3 edit, a future FastAPI edit
+endpoint) is invisible to DynamoDB. This is worse than just "goes stale":
+`update_summary` (`tools/notes.py:241-255`) rebuilds `title`/`tags`/`date`
+in the regenerated frontmatter from the DynamoDB item, not from whatever is
+currently in S3 — so a hand-edited title/tags gets silently reverted the
+next time an unrelated `update_summary` call touches that note (e.g.
+because it joined a different cluster). This is backwards from the
+"S3 is source of truth... no clobbering risk" principle in the root
+`CLAUDE.md`, which currently only covers frontmatter *connections*, not
+title/tags/date.
+
+Same root cause also means KB reindexing is manual-only (`trigger_kb_sync`
+is an agent `@tool`, not an S3 event trigger, so direct content edits sit
+unindexed until something remembers to resync) and note renames orphan
+`s3_key` in DynamoDB (no rename detection).
+
+This sharpens what `docs/future-scope.md` already flags at a high level
+("Two-way sync — edits made in Obsidian propagating back to the graph" is
+listed as future work) — the gap isn't just missing two-way sync, the
+current code actively fights a one-off S3 edit even without Obsidian in the
+picture.
+
+**Fix:** S3 event notification (suffix-filtered to `.md`, so the
+`.md.metadata.json` sidecar is excluded) → Lambda that parses frontmatter
+and upserts the DynamoDB row, keyed on the frontmatter's `note_id` field
+(not the S3 object key) so renames self-heal instead of orphaning. Handle
+`ObjectRemoved` too, so deleted notes don't leave orphaned rows. Keep this
+decoupled from KB reindexing — reconciling a DynamoDB row is cheap and can
+fire per-object, but starting a Bedrock ingestion job is a batched,
+non-trivial-cost operation and shouldn't fire on every single write; keep
+`trigger_kb_sync` on its own (debounced or explicit) cadence. Fail soft on
+malformed frontmatter (log + skip) rather than crash, since manual edits
+will eventually have YAML typos. This is new infra in the
+`agentcore/cdk/` app stack (`SlipBox-App-*` — S3, DynamoDB, Neptune later),
+not the agent's `agentcore.json` policies.
+
 ---
 
 *Recommended order: #1 unblocks #2 and is the app's core value prop. #3 and
@@ -169,4 +209,8 @@ strings per run, no dedup) and is the first caller that actually needs
 PDF/YouTube-aware fetching. #4–#5 are independent metadata/provenance
 polish. #8 is a structural decision worth settling before #1 and #7 are
 built, since it determines whether classification/research land as
-in-process Agent-as-Tool calls or standalone AgentCore agents.*
+in-process Agent-as-Tool calls or standalone AgentCore agents. #9 should
+land early too — it's infra, not agent logic, so it can be built in
+parallel with #1, and every other item that writes frontmatter (#1, #3, #4)
+benefits from DynamoDB being a reliable materialized view instead of a
+separately-mutated copy.*
