@@ -93,12 +93,20 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 - All edges support override; append-only `history` log per edge for provenance.
 - Use `handoff_to_user` from the Strands SDK — do not build custom pause/resume logic.
 
+**Connections live on the card, matching the original method** (Luhmann's notes carried references to other notes on the card itself, not in a separate index):
+- `auto`/confirmed connections are written into the note's own frontmatter (not the body) as typed link lists (`supports`, `contradicts`, `extends`, `related_to`) using `[[wikilinks]]`, so Obsidian's graph/backlinks picks them up. Regenerated from Neptune's current edge state on every change, never appended. Body stays pure prose; frontmatter is system-generated — no clobbering risk.
+- Excluded from KB embedding like the rest of frontmatter; mirrored into `.md.metadata.json` for KB filtering.
+- **Neptune stays the source of truth for the graph** — S3 is source of truth for note content, frontmatter connections are a generated reflection, never authored directly.
+- **Stretch:** pending connections also appear in frontmatter (`status: pending`), making the note a second review surface — an S3 edit synced back triggers a Lambda that calls the same accept/reject function the review UI uses. Build after the MVP review UI is solid.
+
 ### Storage
 
 - **S3** — source of truth. Each ingested item is written as an atomic `.md` file with YAML frontmatter (source, date, confidence scores, relationship metadata). Human-readable, portable, enables Obsidian sync via `aws s3 sync`.
 - **Bedrock Knowledge Base** — syncs from S3, creates embeddings for semantic retrieval. Indefinite persistence (no expiry). Replaces AgentCore Memory which has a hard 365-day cap incompatible with a permanent second brain.
+  - Write a `.md.metadata.json` sidecar next to each `.md` file so frontmatter is indexed as filterable metadata, not embedded inline with the note body — keeps embeddings semantic rather than diluted with metadata text.
+  - Use hierarchical/semantic chunking (not default fixed-size) for longer literature notes so retrieval doesn't cut mid-section.
 - **DynamoDB** — `items` table (structured metadata per ingested item) and `pending_edges` table (confidence-gated edges awaiting review)
-- **Amazon Neptune** — graph DB for typed edges. Vertex types: `Item`, `Concept`, `PermanentNote`, `Source`. Edge types: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`
+- **Amazon Neptune** — graph DB for typed edges. Vertex types: `Item`, `Concept`, `PermanentNote`, `SummaryCard` (stretch — see Note taxonomy below), `Source`. Every vertex carries `created_at`/`updated_at` — powers the timeline/MOC view (see Frontend below). Edge types: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`
 
 ### Hosting
 
@@ -110,6 +118,7 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 - **FastAPI** — backend API between Next.js and AWS (`/ingest`, `/pending-edges`, `/edges/{id}`, `/graph`)
 - **Next.js / TypeScript** — three MVP screens: Ingest, Pending edge review, Graph view
 - Graph visualization: react-force-graph or Cytoscape.js
+- Timeline mode (stretch): same graph data, laid out by `created_at` instead of force-directed, for viewing a MOC's linked notes or a note's neighborhood in chronological/insertion order
 - Hosting: AWS Amplify
 
 ### Key Strands tools
@@ -119,11 +128,19 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 - Custom `@tool` functions — Neptune writes, DynamoDB writes, YouTube transcript extraction, SWOT logic
 - `handoff_to_user` — confidence-gated human review
 
-### Literature notes vs. permanent notes (stretch)
+### Note taxonomy: literature notes, ideas, summary cards (stretch)
 
-- `Item` model = literature note (source-bound)
-- `PermanentNote` type = atomic, in user's own words, decontextualized
-- Agent never auto-creates permanent notes — it proposes, user confirms. Reuses the same pending/confirm/override UX as edges.
+Not a uniform rule across all three: `Item` and `SummaryCard` are information transformation (AI doing this well doesn't undercut the method) and carry `authored_by: model | user`; `PermanentNote` is where the human forming the idea in their own words is the actual point, so it's user-authored only.
+
+- `Item` = literature note (source-bound). `authored_by: model` is the default (ingestion agent extraction, auto-written, no gate); `authored_by: user` when the user writes/replaces it directly. `edited_by_user: bool` flags a model note later hand-edited.
+- `PermanentNote` = idea, atomic, decontextualized. **Always user-authored — no `authored_by` field, no draft state.** Agent never creates a `PermanentNote` vertex; it only suggests via `handoff_to_user` (optionally seeded with starting text), and nothing reaches Neptune until the user writes/edits/saves it themselves.
+- `SummaryCard` = cluster-synthesis rollup spanning multiple items/ideas (SWOT/analysis agent output). `authored_by: model` ("model-derived summary card") stages `status: draft` pending confirm, reusing the same pending/confirm/override UX as edges; `authored_by: user` for a manually assembled rollup.
+
+**Linkages** — no new edge types; widen the existing distillation edges' allowed vertex types instead:
+- `DISTILLED_INTO`: `Item | PermanentNote` → `PermanentNote | SummaryCard`
+- `GROUNDED_IN`: `PermanentNote | SummaryCard` → `Item`
+
+**Structure notes / MOCs** — also no new vertex type: a MOC is just a `PermanentNote` whose content is a curated set of `RELATED_TO` links. Rather than a manual ordering field, its linked notes render sorted by `created_at` — replicating Luhmann's Folgezettel numbering, which encoded chronological insertion order alongside topic structure.
 
 ## MVP Scope
 
@@ -133,3 +150,4 @@ Build in this order, get each layer solid before moving on:
 2. Pending-edge review UI
 3. `--research` fan-out
 4. SWOT analysis and permanent note promotion (stretch)
+5. Frontmatter as a pending-connection review surface (stretch)
