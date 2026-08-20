@@ -1,0 +1,31 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "S3Notes",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:ListBucket"],
+      "Resource": [
+        "arn:aws:s3:::slip-box-notes",
+        "arn:aws:s3:::slip-box-notes/*"
+      ]
+    },
+    {
+      "Sid": "KBRetrieve",
+      "Effect": "Allow",
+      "Action": ["bedrock:Retrieve", "bedrock-agent-runtime:Retrieve"],
+      "Resource": "arn:aws:bedrock:ap-southeast-2:690445895420:knowledge-base/EHSL8ZENQX"
+    },
+    {
+      "Sid": "KBIngest",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:StartIngestionJob",
+        "bedrock:ListDataSources",
+        "bedrock-agent:StartIngestionJob",
+        "bedrock-agent:ListDataSources"
+      ],
+      "Resource": "arn:aws:bedrock:ap-southeast-2:690445895420:knowledge-base/EHSL8ZENQX"
+    }
+  ]
+}

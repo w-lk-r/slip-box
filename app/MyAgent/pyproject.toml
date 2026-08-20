@@ -13,6 +13,7 @@ dependencies = [
     "bedrock-agentcore >= 1.9.1",
     "boto3 >= 1.35.0",
     "botocore[crt] >= 1.35.0",
+    "diagrams>=0.25.1",
     "httpx >= 0.28.0",
     "mcp ~= 1.24.0",
     "python-dotenv >= 1.0.0",
