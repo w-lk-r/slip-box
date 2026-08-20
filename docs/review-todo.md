@@ -78,8 +78,58 @@ or YouTube, even though both are named as first-class source types in the
 hackathon brief. A PDF or YouTube URL would get mangled rather than routed
 to a proper extractor (YouTube transcript API, PDF text extraction).
 
+## 7. Research agent (`--research` fan-out) doesn't exist yet — design notes for when it's built
+
+`CLAUDE.md` describes a `--research` path that fans out to a research agent
+before classification, but there's no research agent, no outward
+search/fetch tools beyond the ingestion `fetch_url`, and no budget
+enforcement. Notes for the build:
+
+**Tools needed**
+- Web search (Tavily or Exa via `strands_tools`), returning ranked snippets
+  so the agent reads before it fetches.
+- `search_notes` first, always — check the KB before going outward so
+  research doesn't re-fetch what's already grounding an existing note.
+- A hardened fetch replacing `fetch_url` (see #6): branch by content type
+  (readable-text extraction for HTML, PDF text extraction, YouTube
+  transcript), returning structured `{title, author, published_date, text}`
+  instead of a stripped blob — that structure is what feeds citations.
+- A citation/source-resolution tool that resolves or creates the canonical
+  `Source` record from fetched metadata (depends on #3).
+
+**Limiting expansion size**
+Don't rely on the system prompt to self-limit tool-call counts. Enforce a
+budget in code: a `ResearchBudget` object created per `--research`
+invocation, threaded through the search/fetch tools as shared state (same
+pattern as the session cache in `main.py`), hard-stopping on:
+- max search queries per run (e.g. 3–5)
+- max sources fetched per run (e.g. 5–8), chosen from search snippets by
+  relevance, not fetched blind
+- max chars per fetched source (lower than the current 50k — research
+  content competes with the note-writing budget, not just one page)
+- a combined character budget across all fetched sources per run, so a
+  handful of huge pages can't each spend the full per-source cap
+- max new notes written per research fan-out, same shape as the existing
+  4+-notes-triggers-a-summary-card cap
+
+Once a cap is hit, the tool should return a truncated/"budget exhausted"
+result rather than error, so the agent wraps up with what it has instead of
+retrying.
+
+**Getting references into expanded notes**
+Reuse the `Source`-vertex fix from #3 rather than building something
+research-specific: every fetched URL resolves to a canonical `source_id`
+(deduped, metadata captured at fetch time). Notes written from research link
+to it the same way any directly-ingested note would —
+`source: [[source-id]]` — using the `RESEARCHED_VIA` edge type already named
+in `CLAUDE.md` (`Item → Source`) to keep "the user gave me this" distinct
+from "I went and found this."
+
 ---
 
-*Recommended order: #1 unblocks #2 and is the app's core value prop; #3–#6
-are metadata/provenance polish on top of a graph that, once #1 lands, will
-actually get written.*
+*Recommended order: #1 unblocks #2 and is the app's core value prop. #3 and
+#6 should land before #7 — the research agent is the workload that will
+hammer flat-string sourcing hardest (N duplicate unstructured `source_url`
+strings per run, no dedup) and is the first caller that actually needs
+PDF/YouTube-aware fetching. #4–#5 are independent metadata/provenance
+polish.*
