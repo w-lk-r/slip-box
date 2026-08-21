@@ -149,7 +149,6 @@ Chronological record of decisions and progress.
 
 ## Up Next
 
-- [ ] Decide whether to `cdk destroy` the abandoned, broken CDK-created Amplify app (`SlipBox-Amplify-default` stack, app id `d171cktks62bs6`) now that the Console-managed app (`d2viclhggmi7s9`) is the real one
 - [ ] Stop using AWS root credentials for CLI/API work — create an IAM user (or IAM Identity Center identity) with admin permissions instead; security best practice regardless of whether it's actually the Amplify IAM-role bug's cause
 - [ ] Fix `fetch_url`'s YouTube handling (review-todo #6) — the natural follow-up to the share app, since YouTube is the explicitly-named near-term want
 - [ ] Classification agent as its own pass — split out of the ingestion agent once it's doing more than "score what I just found," e.g. re-scoring on demand ("what else is this connected to?")
