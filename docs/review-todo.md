@@ -8,7 +8,11 @@ Ordered by priority.
 
 ---
 
-## 1. Relationship edges are never persisted
+## 1. Relationship edges are never persisted — RESOLVED 2026-08-21
+
+`write_edge` now exists and is deployed; see `docs/build-log.md` Week 3.
+Left below for context on what was missing and why. Confidence scoring is
+in-agent for now, not a separate classification agent.
 
 The system prompt (`main.py`) tells the ingestion agent to identify
 SUPPORTS/EXTENDS/CONTRADICTS/RELATED_TO relationships between notes and "note
@@ -28,12 +32,12 @@ confidence, history}` to the `edges` table, and regenerates the target
 note's frontmatter link lists from current edge state (per "Connections live
 on the card" in `CLAUDE.md`).
 
-## 2. Confidence scores don't exist
+## 2. Confidence scores don't exist — RESOLVED 2026-08-21
 
-`EDGE_CONFIDENCE_THRESHOLD` is defined in `config.py` but nothing computes or
-checks a confidence value anywhere. The "edges near threshold render
-differently, user can correct inline" UX has no data to read from. Blocked
-on #1 — confidence is scored at edge-classification time.
+Resolved alongside #1 — `write_edge` scores and stores confidence, dropping
+below-threshold edges. The "edges near threshold render differently, user
+can correct inline" UX still has no frontend to read it (no graph view
+yet), but the data now exists.
 
 ## 3. Source references are a flat, unstructured string
 
@@ -200,6 +204,28 @@ will eventually have YAML typos. This is new infra in the
 `agentcore/cdk/` app stack (`SlipBox-App-*` — S3, DynamoDB, Neptune later),
 not the agent's `agentcore.json` policies.
 
+## 10. Bidirectional Obsidian/S3 sync — open question, not scoped yet
+
+`future-scope.md` currently only covers one-way `aws s3 sync` down to a local
+vault. Whether to make it two-way (local edits in Obsidian propagating back)
+is still open, and is the harder half of the #9 reconciliation problem:
+
+- **Asymmetric merge rule needed:** body edits from Obsidian should win and
+  flip `edited_by_user: true` on the `Item`; frontmatter connections must
+  stay agent-generated from Neptune/DynamoDB and never be merged back from
+  the local copy — otherwise a stale local frontmatter re-upload could
+  silently clobber edge state. This is the write-path mirror of #9's
+  read-path fix (regenerate from S3, never overwrite it).
+- **Mechanism:** `aws s3 sync` is pull/push, not push-notify, so real
+  two-way sync needs either a local watcher (`fswatch`/`inotify`) pushing
+  edits up on save, or a filesystem mount (`mountpoint-s3`, `rclone mount`)
+  instead of periodic sync. The downward direction is #9's S3 Event
+  Notification → Lambda.
+- **Tradeoff:** near-real-time bidirectional sync (edit in Obsidian, see it
+  reflected within seconds) is more moving parts than MVP scope — likely
+  post-MVP, and only worth building once #9's one-way reconciliation exists
+  to build on top of.
+
 ---
 
 *Recommended order: #1 unblocks #2 and is the app's core value prop. #3 and
@@ -213,4 +239,4 @@ in-process Agent-as-Tool calls or standalone AgentCore agents. #9 should
 land early too — it's infra, not agent logic, so it can be built in
 parallel with #1, and every other item that writes frontmatter (#1, #3, #4)
 benefits from DynamoDB being a reliable materialized view instead of a
-separately-mutated copy.*
+separately-mutated copy. #10 is downstream of #9 — don't start it first.*
