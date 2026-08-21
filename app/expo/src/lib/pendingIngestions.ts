@@ -17,10 +17,17 @@ function notify() {
 }
 
 function prune() {
+  // Array.filter() always returns a new reference, even when nothing gets
+  // removed — reassigning `pending` unconditionally would make every
+  // getPendingIngestionsSnapshot() call return a "changed" snapshot to
+  // useSyncExternalStore even when nothing actually changed, looping
+  // forever. Only reassign (and notify) when something was actually pruned.
   const now = Date.now();
-  const before = pending.length;
-  pending = pending.filter((p) => now - p.startedAt < PENDING_TTL_MS);
-  if (pending.length !== before) notify();
+  const filtered = pending.filter((p) => now - p.startedAt < PENDING_TTL_MS);
+  if (filtered.length !== pending.length) {
+    pending = filtered;
+    notify();
+  }
 }
 
 function scheduleSweep() {
@@ -49,9 +56,11 @@ export function clearPendingBefore(newestItemCreatedAt: string | undefined): voi
   if (!newestItemCreatedAt) return;
   const newestMs = Date.parse(newestItemCreatedAt);
   if (Number.isNaN(newestMs)) return;
-  const before = pending.length;
-  pending = pending.filter((p) => p.startedAt >= newestMs);
-  if (pending.length !== before) notify();
+  const filtered = pending.filter((p) => p.startedAt >= newestMs);
+  if (filtered.length !== pending.length) {
+    pending = filtered;
+    notify();
+  }
 }
 
 export function getPendingIngestionsSnapshot(): PendingIngestion[] {
