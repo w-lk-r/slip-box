@@ -65,8 +65,29 @@ Chronological record of decisions and progress.
 
 ---
 
+---
+
+## Week 3 — Review & Edge Writing (Aug 21, 2026)
+
+- Merged `docs/review-todo.md` from a Claude Code cloud session — 9-item gap review of `app/MyAgent/` vs. `CLAUDE.md`. Top finding: the `slip-box-edges` DynamoDB table exists in CDK but nothing ever writes to it — no `write_edge` tool, no classification step. Frontmatter link lists (`supports`/`contradicts`/`extends`/`related_to`) are always initialized empty and never populated.
+- Reviewed the codebase against that list to pick the next build target.
+
+**Decision (Aug 21):** Build edge writing next, not the S3→DynamoDB reconciliation Lambda (review-todo #9). Reasoning: the Lambda protects against notes being edited outside the three agent tools (`write_note`/`write_summary`/`update_summary`), and nothing does that yet — no live data-loss path to fix. Edges are the actual core value prop (typed connections between notes) and unblock everything downstream: confidence scoring, the graph view, pending-edge review, "Find more connections." Reconciliation infra can wait until something (Obsidian hand-edits, a FastAPI edit endpoint) actually writes to S3 outside the agent.
+
+- Added `write_edge` tool (`tools/notes.py`) — writes `{from_id, to_id, type, confidence, history}` to DynamoDB `edges`, dropping silently below `EDGE_CONFIDENCE_THRESHOLD`; on write, regenerates the source note's frontmatter link list via a new `_regenerate_note_links` helper
+- Added `_parse_frontmatter`/`_render_frontmatter` — small round-trip parser for this project's fixed frontmatter schema (not general YAML). `_regenerate_note_links` reads title/tags/date/etc. from the **S3 copy**, not DynamoDB, before rewriting only the link fields, so it doesn't clobber hand-edits — same fix should be back-ported to `update_summary`'s regeneration path (review-todo #9) next time that function is touched
+- Edges render as `[[note_id|Title]]` wikilinks so Obsidian resolves them by filename while displaying the title
+- System prompt (`main.py`) updated: agent now calls `write_edge` for relationships instead of just narrating them in its response text; added per-type guidance (SUPPORTS/CONTRADICTS/EXTENDS/RELATED_TO) and an instruction to score confidence honestly rather than inflate it
+- Confidence scoring lives in the ingestion agent's own reasoning for now (no separate classification agent yet) — matches the "in-agent to start" plan
+- `EDGES_TABLE` env var and DynamoDB IAM permissions were already wired in `agentcore.json`/`policies/agent-permissions.json` from the CDK setup — no infra change needed for this piece
+
+- Tested locally via `agentcore dev`, found and fixed a real bug: the model used `GROUNDED_IN` between two literature notes (only valid `PermanentNote|SummaryCard → Item` per `CLAUDE.md`). `write_edge` now rejects `GROUNDED_IN` unless the source note's DynamoDB `type` is `permanent-note`/`summary-card`, with an error message the model can self-correct from; tool docstring tightened to steer away from it up front. Bad edges deleted, affected notes' frontmatter regenerated to clear the stale `grounded_in` entries.
+- `agentcore deploy` run (Jonathan, via `agentcore deploy --yes` — non-interactive flag needed since `!`-prefixed shell commands aren't a TTY)
+- Verified against the live deployed runtime with `agentcore invoke`: new note written, 3 correctly-typed edges created (SUPPORTS, EXTENDS ×2), no `GROUNDED_IN` misuse, frontmatter regenerated with `[[note_id|Title]]` wikilinks, note also picked up by `update_summary` into an existing cluster. `slip-box-edges` now has 6 rows total, all valid.
+
 ## Up Next
 
-- [ ] Classification agent — proposes typed edges (SUPPORTS/CONTRADICTS/EXTENDS/RELATED_TO/GROUNDED_IN) with confidence scores; writes edges ≥ `EDGE_CONFIDENCE_THRESHOLD` to DynamoDB `edges` table; drops below threshold; runs after new literature notes and after new permanent notes are saved
+- [ ] Back-port the S3-not-DynamoDB frontmatter-read fix from `write_edge`'s `_regenerate_note_links` into `update_summary` (review-todo #9) — still rebuilds title/tags/date from DynamoDB there
+- [ ] Classification agent as its own pass — split out of the ingestion agent once it's doing more than "score what I just found," e.g. re-scoring on demand ("what else is this connected to?")
 - [ ] FastAPI backend — `/ingest`, `/notes` (permanent note write), `/edges/{id}` (edit/delete), `/graph`, `/items` (list all notes) endpoints
 - [ ] Next.js frontend — two MVP screens: Ingest + permanent note editor (selection-first flow), Graph view with collapsible summary card clusters and inline edge editing

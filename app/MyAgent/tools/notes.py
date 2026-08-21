@@ -4,13 +4,15 @@ import json
 import datetime
 import logging
 import os
+from decimal import Decimal
 
 import boto3
 import httpx
+from boto3.dynamodb.conditions import Key
 from dotenv import load_dotenv
 from strands import tool
 
-from config import FETCH_URL_MAX_CHARS, KB_RETRIEVE_TOP_K
+from config import EDGE_CONFIDENCE_THRESHOLD, FETCH_URL_MAX_CHARS, KB_RETRIEVE_TOP_K
 
 load_dotenv()
 
@@ -19,6 +21,7 @@ log = logging.getLogger(__name__)
 S3_BUCKET = os.environ["S3_BUCKET"]
 KB_ID = os.environ["KB_ID"]
 ITEMS_TABLE = os.environ["ITEMS_TABLE"]
+EDGES_TABLE = os.environ["EDGES_TABLE"]
 REGION = os.environ.get("AWS_REGION", os.environ.get("REGION", "ap-southeast-2"))
 
 s3 = boto3.client("s3", region_name=REGION)
@@ -26,11 +29,112 @@ ddb = boto3.resource("dynamodb", region_name=REGION)
 bedrock_agent = boto3.client("bedrock-agent", region_name=REGION)
 bedrock_runtime = boto3.client("bedrock-agent-runtime", region_name=REGION)
 
+# Frontmatter link field each edge type is written into on the *source* note's
+# own card (Luhmann-style — connections live on the card, not a separate index).
+EDGE_TYPE_TO_FIELD = {
+    "SUPPORTS": "supports",
+    "CONTRADICTS": "contradicts",
+    "EXTENDS": "extends",
+    "RELATED_TO": "related_to",
+    "GROUNDED_IN": "grounded_in",
+}
+
 
 def _slugify(title: str) -> str:
     slug = re.sub(r'[^\w\s-]', '', title.lower())
     slug = re.sub(r'[\s_-]+', '-', slug)
     return slug.strip('-')[:60]
+
+
+def _parse_frontmatter(content: str) -> tuple[dict, str]:
+    """
+    Parse the fixed frontmatter schema this module writes (flat scalars + simple
+    list blocks). Not a general YAML parser — only handles the shapes write_note/
+    write_summary/write_edge produce.
+    """
+    end = content.find("\n---\n", 4)
+    fm_lines = content[4:end].split("\n") if content.startswith("---\n") and end != -1 else []
+    body = content[end + 5:] if end != -1 else content
+
+    fields: dict = {}
+    i = 0
+    while i < len(fm_lines):
+        line = fm_lines[i]
+        if not line.strip() or line.startswith(" "):
+            i += 1
+            continue
+        key, _, val = line.partition(":")
+        key, val = key.strip(), val.strip()
+        if val:
+            fields[key] = [] if val == "[]" else val
+            i += 1
+            continue
+        # Scalar with empty value vs. start of a list block — peek ahead.
+        nxt = fm_lines[i + 1].strip() if i + 1 < len(fm_lines) else ""
+        if nxt == "[]":
+            fields[key] = []
+            i += 2
+        elif nxt.startswith("-"):
+            items = []
+            i += 1
+            while i < len(fm_lines) and fm_lines[i].strip().startswith("-"):
+                items.append(fm_lines[i].strip()[1:].strip())
+                i += 1
+            fields[key] = items
+        else:
+            fields[key] = ""
+            i += 1
+    return fields, body
+
+
+def _render_frontmatter(fields: dict) -> str:
+    lines = ["---"]
+    for key, val in fields.items():
+        if isinstance(val, list):
+            if val:
+                lines.append(f"{key}:")
+                lines.extend(f"  - {v}" for v in val)
+            else:
+                lines.append(f"{key}: []")
+        else:
+            lines.append(f"{key}: {val}")
+    lines.append("---\n")
+    return "\n".join(lines)
+
+
+def _regenerate_note_links(note_id: str) -> None:
+    """
+    Rewrite a note's frontmatter link lists from its current outgoing edges in
+    DynamoDB, as [[note_id|Title]] wikilinks so Obsidian's graph/backlinks pick
+    them up. Preserves every other frontmatter field (title, tags, date, ...) and
+    the body exactly as they currently are in S3 — S3 stays source of truth for
+    note content, this only ever touches the generated link fields.
+    """
+    item = ddb.Table(ITEMS_TABLE).get_item(Key={"note_id": note_id}).get("Item")
+    if not item:
+        log.warning(f"Cannot regenerate links: note {note_id} not found in items table")
+        return
+
+    s3_key = item["s3_key"]
+    existing = s3.get_object(Bucket=S3_BUCKET, Key=s3_key)["Body"].read().decode()
+    fields, body = _parse_frontmatter(existing)
+
+    edges = ddb.Table(EDGES_TABLE).query(KeyConditionExpression=Key("from_id").eq(note_id)).get("Items", [])
+    by_type: dict[str, list[str]] = {}
+    for edge in edges:
+        by_type.setdefault(edge["type"], []).append(edge["to_id"])
+
+    target_ids = {tid for ids in by_type.values() for tid in ids}
+    titles = {}
+    for tid in target_ids:
+        target = ddb.Table(ITEMS_TABLE).get_item(Key={"note_id": tid}).get("Item")
+        titles[tid] = target["title"] if target else tid
+
+    for edge_type, field in EDGE_TYPE_TO_FIELD.items():
+        fields[field] = [f"[[{tid}|{titles[tid]}]]" for tid in by_type.get(edge_type, [])]
+
+    s3.put_object(Bucket=S3_BUCKET, Key=s3_key, Body=(_render_frontmatter(fields) + body).encode(), ContentType="text/markdown")
+    log.info(f"Regenerated links for {note_id}: {sum(len(v) for v in by_type.values())} edges")
 
 
 @tool
@@ -101,6 +205,63 @@ related_to: []
 
     log.info(f"Written note: {s3_key}")
     return {"note_id": note_id, "s3_key": s3_key, "title": title}
+
+
+@tool
+def write_edge(from_id: str, to_id: str, edge_type: str, confidence: float, reason: str = "") -> dict:
+    """
+    Propose a typed connection from one note to another. Writes it to the edges
+    table only if confidence meets EDGE_CONFIDENCE_THRESHOLD — below-threshold
+    edges are dropped entirely, no queue. On write, regenerates the source note's
+    frontmatter link list so the connection shows up on its card as a [[wikilink]].
+
+    Args:
+        from_id: note_id of the note this connection originates from
+        to_id: note_id of the note being connected to
+        edge_type: SUPPORTS, CONTRADICTS, EXTENDS, or RELATED_TO for connections between
+            literature notes. GROUNDED_IN is reserved for a permanent-note or summary-card
+            citing the literature note it's grounded in — do not use it between two
+            literature notes.
+        confidence: how confident you are in this classification, 0-1
+        reason: one-sentence justification, kept in the edge's history for provenance
+
+    Returns:
+        dict with written: bool, and edge_id if written
+    """
+    edge_type = edge_type.strip().upper()
+    if edge_type not in EDGE_TYPE_TO_FIELD:
+        return {"written": False, "error": f"edge_type must be one of {sorted(EDGE_TYPE_TO_FIELD)}"}
+    if not 0 <= confidence <= 1:
+        return {"written": False, "error": "confidence must be between 0 and 1"}
+    if edge_type == "GROUNDED_IN":
+        source = ddb.Table(ITEMS_TABLE).get_item(Key={"note_id": from_id}).get("Item")
+        if not source or source.get("type") not in ("permanent-note", "summary-card"):
+            return {
+                "written": False,
+                "error": "GROUNDED_IN must originate from a permanent-note or summary-card, not a literature-note. "
+                         "Use SUPPORTS, CONTRADICTS, EXTENDS, or RELATED_TO between literature notes instead.",
+            }
+    if confidence < EDGE_CONFIDENCE_THRESHOLD:
+        log.info(f"Edge dropped below threshold: {from_id} -{edge_type}-> {to_id} ({confidence})")
+        return {"written": False, "reason": "below confidence threshold"}
+
+    now = datetime.datetime.utcnow().isoformat()
+    edge_id = uuid.uuid4().hex
+    confidence_dec = Decimal(str(confidence))
+    ddb.Table(EDGES_TABLE).put_item(Item={
+        "from_id": from_id,
+        "edge_id": edge_id,
+        "to_id": to_id,
+        "type": edge_type,
+        "confidence": confidence_dec,
+        "authored_by": "model",
+        "created_at": now,
+        "history": [{"action": "created", "by": "model", "at": now, "confidence": confidence_dec, "reason": reason}],
+    })
+
+    _regenerate_note_links(from_id)
+    log.info(f"Written edge: {from_id} -{edge_type}-> {to_id} ({confidence})")
+    return {"written": True, "edge_id": edge_id}
 
 
 @tool

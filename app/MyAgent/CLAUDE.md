@@ -14,6 +14,7 @@ Agent-specific guidance for `app/MyAgent/`. Loaded alongside the root `CLAUDE.md
 - `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` on `slip-box-notes`
 - `bedrock-agent-runtime:Retrieve` on `SlipCaseKB`
 - `bedrock-agent:StartIngestionJob`, `bedrock-agent:ListDataSources` on `SlipCaseKB`
+- `dynamodb:PutItem/GetItem/UpdateItem/DeleteItem/Query/Scan` on `slip-box-items`, `slip-box-edges`, and the `to_id-index` GSI
 
 ## Dependencies
 
@@ -26,6 +27,7 @@ Runtime deps are in `pyproject.toml`. The `.env` file (gitignored) holds local c
 | Tool | Purpose |
 |---|---|
 | `write_note` | Writes `.md` + sidecar to S3, record to DynamoDB `items` |
+| `write_edge` | Writes a typed edge to DynamoDB `edges` if confidence ≥ `EDGE_CONFIDENCE_THRESHOLD`; regenerates the source note's frontmatter link list |
 | `write_summary` | Writes a `summary-card` note grounding a cluster of note_ids |
 | `update_summary` | Adds/removes notes from an existing summary card's cluster |
 | `search_notes` | Semantic retrieval against `SlipCaseKB` |
