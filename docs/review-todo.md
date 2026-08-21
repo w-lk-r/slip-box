@@ -226,9 +226,11 @@ is still open, and is the harder half of the #9 reconciliation problem:
   post-MVP, and only worth building once #9's one-way reconciliation exists
   to build on top of.
 
-## 11. No guardrails between FastAPI input and the agent — flag before FastAPI is built, not after
+## 11. No guardrails between FastAPI input and the agent — RESOLVED 2026-08-21 (first bullet only)
 
-**In progress 2026-08-21** — planned (not yet deployed) as part of the FastAPI backend build: pydantic validation + API Gateway's native API Key/Usage Plan (auth + throttle/quota) cover the first bullet below via infra config rather than hand-rolled app code; see `docs/build-log.md` Week 3. Bedrock Guardrails (second bullet) is explicitly deferred — plug-in point documented as `app/MyAgent/model/load.py`'s `load_model()`. Update this to RESOLVED once the stack is actually deployed and the 422/403 guardrail checks in the verification plan have passed against the real stack, not before.
+Deployed and verified against the live stack: pydantic validation (422s confirmed on empty/conflicting `/ingest` bodies) and API Gateway's native API Key + Usage Plan (403 confirmed with no/wrong key, throttle 5rps/10burst + 2000/day quota attached) cover the first bullet below entirely through infra config, no hand-rolled app code. See `docs/build-log.md` Week 3 for the two real IAM/env bugs this deploy surfaced and fixed.
+
+Bedrock Guardrails (second bullet) remains deferred — plug-in point documented as `app/MyAgent/model/load.py`'s `load_model()`. This item stays open until that's built.
 
 Once `/ingest` exists, arbitrary user-submitted URLs/text/PDFs flow straight
 into the agent's context, and `fetch_url` pulls in third-party web content

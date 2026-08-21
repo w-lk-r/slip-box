@@ -46,7 +46,12 @@ export class ApiStack extends Stack {
       new iam.PolicyStatement({
         sid: 'InvokeAgent',
         actions: ['bedrock-agentcore:InvokeAgentRuntime'],
-        resources: [agentRuntimeArn],
+        // InvokeAgentRuntime actually operates on the runtime-endpoint
+        // sub-resource (.../runtime-endpoint/DEFAULT), not the bare runtime
+        // ARN — scoping to just the runtime ARN 403s at call time even though
+        // it looks right at a glance. Same pattern as an S3 bucket vs. its
+        // objects.
+        resources: [agentRuntimeArn, `${agentRuntimeArn}/*`],
       })
     );
 

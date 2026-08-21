@@ -8,11 +8,20 @@ its own tools — this function does no writes of its own, just invokes and logs
 """
 import json
 import logging
+import os
 
-from clients import AGENT_RUNTIME_ARN, agentcore
+import boto3
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)
+
+# Deliberately not importing clients.py: it requires S3_BUCKET/ITEMS_TABLE/
+# EDGES_TABLE, which this function's environment doesn't set (least-privilege —
+# this worker only ever calls invoke_agent_runtime; the agent's own IAM role
+# handles all S3/DynamoDB writes).
+AGENT_RUNTIME_ARN = os.environ["AGENT_RUNTIME_ARN"]
+REGION = os.environ.get("AWS_REGION", os.environ.get("REGION", "ap-southeast-2"))
+agentcore = boto3.client("bedrock-agentcore", region_name=REGION)
 
 
 def handler(event, context):
