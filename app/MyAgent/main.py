@@ -24,7 +24,7 @@ LONGER DOCUMENT WITH MULTIPLE IDEAS → identify the discrete ideas or concepts,
 
 For every note:
 - Give it a precise, descriptive title (this becomes the filename — be specific, not generic)
-- Write the body as clear prose: the idea, why it matters, relevant context from the source
+- Write the body as ONE tight paragraph, roughly 3-6 sentences. Fold in why it matters and relevant context as part of stating the idea itself — don't tack them on as a separate paragraph. If the idea genuinely needs a second paragraph to stand on its own, that's a sign it's two ideas: split it into two notes instead of writing one long note.
 - Tag it with the key concepts it touches
 - Record the source URL if one was provided
 
