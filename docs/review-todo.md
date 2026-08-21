@@ -226,6 +226,36 @@ is still open, and is the harder half of the #9 reconciliation problem:
   post-MVP, and only worth building once #9's one-way reconciliation exists
   to build on top of.
 
+## 11. No guardrails between FastAPI input and the agent — flag before FastAPI is built, not after
+
+**In progress 2026-08-21** — planned (not yet deployed) as part of the FastAPI backend build: pydantic validation + API Gateway's native API Key/Usage Plan (auth + throttle/quota) cover the first bullet below via infra config rather than hand-rolled app code; see `docs/build-log.md` Week 3. Bedrock Guardrails (second bullet) is explicitly deferred — plug-in point documented as `app/MyAgent/model/load.py`'s `load_model()`. Update this to RESOLVED once the stack is actually deployed and the 422/403 guardrail checks in the verification plan have passed against the real stack, not before.
+
+Once `/ingest` exists, arbitrary user-submitted URLs/text/PDFs flow straight
+into the agent's context, and `fetch_url` pulls in third-party web content
+the agent then reasons over with tools that write to S3/DynamoDB
+(`write_note`, `write_edge`, `write_summary`, `update_summary`). That's a
+classic **indirect prompt injection** surface: a page fetched via
+`fetch_url` could contain text aimed at the agent rather than the user —
+instructions trying to get it to write bogus notes, mislabel edges with
+inflated confidence, or (as more tools land) do something more damaging.
+Separately, there's currently no request validation, auth, or
+rate-limiting at the API boundary at all — anyone who reaches `/ingest` can
+burn Bedrock spend or spam the KB with junk.
+
+**Fix, scoped in layers:**
+- **FastAPI-level input validation** — pydantic schemas on every endpoint
+  (size caps on `text`/`url` fields, content-type checks), basic auth
+  (even a static API key is enough for a hackathon demo) and rate-limiting
+  before a request ever reaches `agentcore invoke`/`invoke_agent_runtime`.
+- **Amazon Bedrock Guardrails** — the AWS-native layer to apply to the
+  model call itself: content filters, denied topics, and prompt-attack/
+  jailbreak detection. Worth evaluating specifically for the
+  `fetch_url` → agent path, since that's the one place untrusted
+  third-party content (not just the user's own input) reaches the model.
+- Neither of these exists today. Build them alongside the FastAPI backend,
+  not as a follow-up after `/ingest` ships open — an unauthenticated,
+  unvalidated ingestion endpoint is an easy thing to demo past and forget.
+
 ---
 
 *Recommended order: #1 unblocks #2 and is the app's core value prop. #3 and
@@ -239,4 +269,7 @@ in-process Agent-as-Tool calls or standalone AgentCore agents. #9 should
 land early too — it's infra, not agent logic, so it can be built in
 parallel with #1, and every other item that writes frontmatter (#1, #3, #4)
 benefits from DynamoDB being a reliable materialized view instead of a
-separately-mutated copy. #10 is downstream of #9 — don't start it first.*
+separately-mutated copy. #10 is downstream of #9 — don't start it first.
+#11 must land with the FastAPI backend itself, not after — the fetch_url →
+agent path is a live prompt-injection surface the moment `/ingest` is
+public.*

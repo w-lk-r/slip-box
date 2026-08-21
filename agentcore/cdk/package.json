@@ -10,6 +10,8 @@
     "test": "jest",
     "cdk": "npm run build && cdk",
     "deploy:app": "npm run build && cdk deploy \"SlipBox-App-*\" --require-approval never",
+    "build:api": "cd ../../app/api && ./build.sh",
+    "deploy:api": "npm run build:api && npm run build && cdk deploy \"SlipBox-Api-*\" --require-approval never",
     "clean": "rm -rf dist",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

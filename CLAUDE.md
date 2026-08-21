@@ -128,8 +128,8 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 
 ### Frontend
 
-- **FastAPI** — backend API between Next.js and AWS (`/ingest`, `/pending-edges`, `/edges/{id}`, `/graph`)
-- **Next.js / TypeScript** — three MVP screens: Ingest, Pending edge review, Graph view
+- **FastAPI** — backend API between Next.js and AWS, deployed as two Lambda functions behind API Gateway (`agentcore/cdk/lib/api-stack.ts`, `app/api/`). `POST /ingest` is asynchronous — an `ApiFunction` validates input and hands off to a `WorkerFunction` that calls `invoke_agent_runtime` (sidesteps API Gateway's ~29s Lambda-proxy timeout, which a synchronous multi-tool-call ingest can exceed); the frontend polls `GET /items` for the result. `GET /items`, `GET /graph`, and `PATCH`/`DELETE /edges/{from_id}/{edge_id}` (composite path — the edges table's key is PK `from_id` + SK `edge_id`, no GSI for point-addressing by `edge_id` alone) read/write DynamoDB directly, no agent involved. Auth via API Gateway's native API Key + Usage Plan (single shared key — real per-user auth arrives with multi-user support, see `docs/future-scope.md`).
+- **Next.js / TypeScript** — two MVP screens: Ingest, Graph view (with inline edge editing — no separate pending-review queue, since edges are auto-written above threshold, see Confidence and edge correction below)
 - Graph visualization: react-force-graph or Cytoscape.js
 - Timeline mode (stretch): same graph data, laid out by `created_at` instead of force-directed, for viewing a MOC's linked notes or a note's neighborhood in chronological/insertion order
 - Hosting: AWS Amplify

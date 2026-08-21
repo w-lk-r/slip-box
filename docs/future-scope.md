@@ -52,6 +52,8 @@ Currently single-user — one S3 bucket, one KB, no isolation between users.
 
 **Fix:** S3 prefixes per user (`s3://slip-box-notes/{user-id}/`) + `user_id` in each `.md` file's YAML frontmatter + metadata filtering on KB queries at retrieval time. Bedrock Knowledge Bases support metadata filtering natively, so one bucket and one KB can serve multiple users with full retrieval isolation. No per-user infrastructure needed.
 
+Real per-user auth (Cognito or equivalent — user pool, JWT verification, token refresh) arrives together with this, not before it. The FastAPI backend's MVP auth is a single shared static API key precisely because there's only one user; that stops being sufficient the moment this item gets built, not sooner.
+
 ## Collaborative Vaults
 
 Multi-user knowledge graphs with shared corpora and per-user pending-edge review queues.
