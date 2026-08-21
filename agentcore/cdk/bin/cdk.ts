@@ -2,7 +2,6 @@
 import { AgentCoreStack, type HarnessConfig } from '../lib/cdk-stack';
 import { AppStack } from '../lib/app-stack';
 import { ApiStack } from '../lib/api-stack';
-import { AmplifyStack } from '../lib/amplify-stack';
 import { ConfigIO, HarnessSpecSchema, type AwsDeploymentTarget } from '@aws/agentcore-cdk';
 import { App, type Environment } from 'aws-cdk-lib';
 import * as path from 'path';
@@ -200,34 +199,6 @@ async function main() {
         'agentcore:target-name': target.name,
       },
     });
-
-    // Only constructed when GITHUB_TOKEN is actually set, so plain
-    // `agentcore deploy` / `npm run deploy:api` runs (which never set it)
-    // are completely unaffected. Once GITHUB_TOKEN is present the intent to
-    // deploy Amplify is clear, so missing API_KEY/AMPLIFY_BASIC_AUTH_PASSWORD
-    // at that point is a real misconfiguration worth failing loudly on,
-    // rather than silently skipping like the absence of GITHUB_TOKEN itself.
-    if (process.env.GITHUB_TOKEN) {
-      const apiKey = process.env.API_KEY;
-      const basicAuthPassword = process.env.AMPLIFY_BASIC_AUTH_PASSWORD;
-      if (!apiKey || !basicAuthPassword) {
-        throw new Error(
-          'GITHUB_TOKEN is set (Amplify deploy intended) but API_KEY and/or ' +
-            'AMPLIFY_BASIC_AUTH_PASSWORD are missing — see app/web/README.md.'
-        );
-      }
-      new AmplifyStack(app, `SlipBox-Amplify-${sanitize(target.name)}`, {
-        env,
-        description: `Slip Box web app hosting (Amplify) for ${target.name}`,
-        githubToken: process.env.GITHUB_TOKEN,
-        apiKey,
-        basicAuthPassword,
-        tags: {
-          'agentcore:project-name': spec.name,
-          'agentcore:target-name': target.name,
-        },
-      });
-    }
   }
 
   app.synth();

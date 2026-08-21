@@ -22,24 +22,24 @@ Open `http://localhost:3000` — click a node for its full note detail, click an
 
 ## Deploy (AWS Amplify Hosting)
 
-Defined as code in `agentcore/cdk/lib/amplify-stack.ts` (Gen 2, `WEB_COMPUTE` platform — officially supports Next.js App Router SSR/Route Handlers). One piece can't be IaC'd: connecting to GitHub needs a Personal Access Token, since that's you authorizing AWS to access your own GitHub account — same shape as `eas build` needing your Apple credentials.
+Set up directly in the **Amplify Console** (Gen 2, `WEB_COMPUTE` platform — officially supports Next.js App Router SSR/Route Handlers), not via CDK. An earlier pass tried managing this as code (`agentcore/cdk/lib/amplify-stack.ts`), but every build failed with Amplify's `Unable to assume specified IAM Role` error regardless of how the service role's trust policy was configured — including the exact role AWS's own Console-driven "Amplify - Backend Deployment" role-creation flow produces. Root cause undetermined (possibly related to this account's use of root credentials rather than an IAM user — service-to-service role assumption can behave differently under a literal root session). Reverted the CDK stack rather than keep fighting it; see `docs/build-log.md` for the full debugging trail if picking this back up later.
 
-**One-time: generate a GitHub PAT.** GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → New token, scoped to just the `slip-box` repo, with **Contents: Read** and **Webhooks: Read and write** permissions (Amplify needs Webhooks to auto-deploy on push). CloudFormation does not persist this token beyond establishing the connection.
+**Console setup, one-time:**
+1. Amplify Console → **Create new app** → connect the `slip-box` GitHub repo, branch `main`.
+2. Monorepo: set the app root to `app/web`.
+3. Environment variables: `API_KEY` (same value as this app's `.env.local`), `BACKEND_BASE_URL` (the API Gateway `prod` endpoint).
+4. **App settings → IAM roles** — attach a service role (Console-created via the "Amplify - Backend Deployment" use case).
+5. **App settings → General → Edit** — enable HTTP Basic Auth, set a username/password. This is mandatory, not optional: `API_KEY` only protects the AWS backend from unauthorized direct calls, it does nothing to stop anyone who finds the Amplify URL from viewing note content or using the edge-correction UI.
+6. Save, then trigger the first build manually (Console → "Run build") — connecting the app doesn't auto-build until the next push.
 
-**Deploy:**
-```bash
-cd agentcore/cdk
-export GITHUB_TOKEN=<the PAT above>
-export API_KEY=<same value as .env.local — the API Gateway DemoKey>
-export AMPLIFY_BASIC_AUTH_PASSWORD=<pick a password>   # gates the whole site, see below
-npm run deploy:amplify
+**Critical, easy-to-miss step:** Amplify Console environment variables are only available at *build* time by default — Next.js Route Handlers (which run inside the SSR compute Lambda at request time) don't see them, so `/api/*` routes 500 with "must be set" even though the Console clearly shows the values configured. Fix: **App settings → Build settings → Edit**, and add a line to the `build` phase, before `npm run build`, that writes the needed vars into `.env.production` (relative to the app root — the build phase's working directory is already `app/web`, not the repo root, despite what AWS's own monorepo docs example implies):
+```yaml
+build:
+  commands:
+    - env | grep -e API_KEY -e BACKEND_BASE_URL >> .env.production
+    - npm run build
 ```
-
-The stack outputs the app's default domain (`https://main.<app-id>.amplifyapp.com`). First deploy triggers Amplify's initial build automatically; every push to `main` after that redeploys via the webhook.
-
-**Site-wide HTTP Basic Auth is mandatory, not optional.** The `API_KEY` env var only protects the AWS backend from unauthorized direct calls — it does nothing to stop anyone who finds the Amplify URL from viewing the pages themselves (your actual note content) or using the edge-correction UI. `AMPLIFY_BASIC_AUTH_PASSWORD` sets a username/password (`slipbox` / whatever you chose) that the browser prompts for before loading anything — set via `basicAuthConfig` in the CDK stack, enforced by Amplify Hosting itself, transmitted over HTTPS (Amplify Hosting is HTTPS-only by default). This is "good enough for a single-user demo," not real per-user auth — that arrives with multi-user support, see `docs/future-scope.md`.
-
-To re-run later without re-exporting everything, keep those three values in your shell profile or a password manager — they're not stored in the repo or echoed back by `cdk deploy` (only the app ID, default domain, and basic-auth *username* are printed as outputs).
+Next.js loads `.env.production` at build time and those values become part of the server bundle, available to `process.env` inside Route Handlers at runtime.
 
 ## Structure
 
