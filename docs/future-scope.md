@@ -63,3 +63,11 @@ Multi-user knowledge graphs with shared corpora and per-user pending-edge review
 ## Public Graph Sharing
 
 Read-only shareable links to a subgraph — e.g. share the cluster of notes around a specific concept or research thread.
+
+---
+
+## Real ingest-completion tracking
+
+The Expo app's "Generating notes…" placeholder (`app/expo/src/lib/pendingIngestions.ts`) is a client-only, timeout-based best guess — `POST /ingest` returns `202 processing` immediately and there's no way to actually know when a session finished, so the placeholder just clears itself after ~90s or whenever a newer item shows up, whichever comes first. Fine for a solo hackathon MVP, but it's a guess, not a fact.
+
+**Real fix:** a small DynamoDB record per session (`session_id`, `status: processing|complete|error`, timestamps) written by the `WorkerFunction` before/after it calls `invoke_agent_runtime`, exposed via a `GET /ingest/{session_id}` endpoint. The client polls that instead of guessing — the placeholder clears exactly when the backend says the turn is done, not on a timer.

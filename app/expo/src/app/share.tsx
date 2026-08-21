@@ -9,6 +9,7 @@ import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { ingest, type IngestMode, type IngestPayload } from '@/lib/api';
+import { addPendingIngestion } from '@/lib/pendingIngestions';
 import { toIngestPayload } from '@/lib/shareIntent';
 import { fetchYoutubeContent, isYoutubeUrl, type YoutubeContent } from '@/lib/youtube';
 
@@ -82,6 +83,7 @@ export default function ShareScreen() {
     setStatus('sending');
     const result = await ingest(payload);
     if (result.ok) {
+      addPendingIngestion(result.sessionId);
       setStatus('sent');
     } else {
       setStatus('error');

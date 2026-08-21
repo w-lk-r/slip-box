@@ -1,5 +1,5 @@
 import { Link, useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useSyncExternalStore } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, SectionList, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -7,6 +7,11 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { listItems, type Item } from '@/lib/api';
+import {
+  clearPendingBefore,
+  getPendingIngestionsSnapshot,
+  subscribePendingIngestions,
+} from '@/lib/pendingIngestions';
 
 const PAGE_SIZE = 20;
 
@@ -47,6 +52,17 @@ function groupByDate(items: Item[]): { title: string; data: Item[] }[] {
   return Array.from(groups.entries()).map(([key, data]) => ({ title: sectionTitle(key), data }));
 }
 
+function PendingRow() {
+  return (
+    <ThemedView type="backgroundElement" style={[styles.row, styles.pendingRow]}>
+      <ActivityIndicator size="small" />
+      <ThemedText type="small" themeColor="textSecondary">
+        Generating notes from your share…
+      </ThemedText>
+    </ThemedView>
+  );
+}
+
 function ItemRow({ item }: { item: Item }) {
   return (
     <Link href={`/note/${item.note_id}`} asChild>
@@ -69,6 +85,7 @@ export default function RecentScreen() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const pendingIngestions = useSyncExternalStore(subscribePendingIngestions, getPendingIngestionsSnapshot);
 
   const loadFirstPage = useCallback(async () => {
     const result = await listItems(PAGE_SIZE);
@@ -76,6 +93,13 @@ export default function RecentScreen() {
       setItems(result.items);
       setCursor(result.cursor);
       setError(null);
+      // Pages aren't in date order (see groupByDate's own comment) — scan
+      // the whole page rather than assume result.items[0] is the newest.
+      const newest = result.items.reduce<string | undefined>(
+        (max, i) => (i.created_at && (!max || i.created_at > max) ? i.created_at : max),
+        undefined
+      );
+      clearPendingBefore(newest);
     } else {
       setError(result.error);
     }
@@ -129,6 +153,15 @@ export default function RecentScreen() {
           onEndReached={handleEndReached}
           onEndReachedThreshold={0.4}
           ListFooterComponent={loadingMore ? <ActivityIndicator style={styles.footer} /> : null}
+          ListHeaderComponent={
+            pendingIngestions.length > 0 ? (
+              <ThemedView style={styles.pendingList}>
+                {pendingIngestions.map((p) => (
+                  <PendingRow key={p.sessionId} />
+                ))}
+              </ThemedView>
+            ) : null
+          }
           ListEmptyComponent={
             loaded && !error ? <ThemedText type="small">Nothing here yet.</ThemedText> : null
           }
@@ -157,6 +190,15 @@ const styles = StyleSheet.create({
     padding: Spacing.three,
     borderRadius: Spacing.two,
     gap: Spacing.one,
+  },
+  pendingList: {
+    gap: Spacing.two,
+    marginBottom: Spacing.three,
+  },
+  pendingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
   },
   error: {
     marginTop: Spacing.three,
