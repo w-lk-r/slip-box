@@ -108,8 +108,9 @@ Chronological record of decisions and progress.
 - Full round trip verified against the live deployed stack: `POST /ingest` → 202 with session ID (instant, confirming the async handoff isn't blocking) → agent completed in ~36s (comfortably past what API Gateway's 29s timeout would have allowed, validating the whole async design) → note + 3 correctly-typed edges (RELATED_TO/SUPPORTS/EXTENDS) visible via `/items` and `/graph` → `PATCH`/`DELETE` on a throwaway edge through the live API, frontmatter regenerated correctly on the real S3 object. Also confirmed the auth guardrail: 403 with no/wrong API key, 200 with the correct one.
 - `review-todo.md` #11 marked RESOLVED — see there for detail.
 
+- Fixed `update_summary`'s clobber bug (review-todo #9): it now reuses `write_edge`'s `_parse_frontmatter`/`_render_frontmatter` helpers to regenerate frontmatter from S3, only touching `grounded_in`, instead of rebuilding `title`/`tags`/`date` from DynamoDB. Verified live — hand-edited a real summary card's title directly in S3, ran `update_summary`, confirmed the hand-edit survived (previously would've been silently reverted), then restored the original.
+
 ## Up Next
 
-- [ ] Back-port the S3-not-DynamoDB frontmatter-read fix from `write_edge`'s `_regenerate_note_links` into `update_summary` (review-todo #9) — still rebuilds title/tags/date from DynamoDB there
 - [ ] Classification agent as its own pass — split out of the ingestion agent once it's doing more than "score what I just found," e.g. re-scoring on demand ("what else is this connected to?")
 - [ ] Next.js frontend — two MVP screens: Ingest + permanent note editor (selection-first flow), Graph view with collapsible summary card clusters and inline edge editing

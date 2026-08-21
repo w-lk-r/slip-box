@@ -393,29 +393,15 @@ def update_summary(summary_note_id: str, add_note_ids: list[str] = [], remove_no
         },
     )
 
-    # Regenerate S3 frontmatter, preserving the existing body
+    # Regenerate frontmatter from the current S3 copy, not DynamoDB — preserves
+    # any hand-edited title/tags/date instead of silently reverting them the
+    # next time an unrelated update_summary call touches this note.
     s3_key = item["s3_key"]
     existing = s3.get_object(Bucket=S3_BUCKET, Key=s3_key)["Body"].read().decode()
-    end_of_frontmatter = existing.find("\n---\n", 4)
-    body = existing[end_of_frontmatter + 5:] if end_of_frontmatter != -1 else ""
+    fields, body = _parse_frontmatter(existing)
+    fields["grounded_in"] = grounded_in
 
-    tag_lines = "\n".join(f"  - {t}" for t in item.get("tags", [])) or "  []"
-    grounded_lines = "\n".join(f"  - {n}" for n in grounded_in) or "  []"
-    md_content = f"""---
-title: {item["title"]}
-note_id: {summary_note_id}
-type: summary-card
-authored_by: {item.get("authored_by", "model")}
-date: {item["date"]}
-tags:
-{tag_lines}
-grounded_in:
-{grounded_lines}
-related_to: []
----
-{body}"""
-
-    s3.put_object(Bucket=S3_BUCKET, Key=s3_key, Body=md_content.encode(), ContentType="text/markdown")
+    s3.put_object(Bucket=S3_BUCKET, Key=s3_key, Body=(_render_frontmatter(fields) + body).encode(), ContentType="text/markdown")
     log.info(f"Updated summary card cluster: {s3_key}")
     return {"note_id": summary_note_id, "grounded_in": grounded_in}
 

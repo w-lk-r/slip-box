@@ -164,20 +164,21 @@ add agent` per route — matches the "four separate Strands agents" framing
 literally, isolates blast radius/scaling/cost per flow, but means N cold
 starts and N deploy surfaces instead of one).
 
-## 9. DynamoDB has no reconciliation path for edits made directly in S3/KB
+## 9. DynamoDB has no reconciliation path for edits made directly in S3/KB — clobber bug RESOLVED 2026-08-21, Lambda still open
 
-DynamoDB `items` is only ever written by `write_note` and `update_summary`
-— nothing observes S3 for changes, so any edit made outside those two tools
-(Obsidian sync after `aws s3 sync`, a direct S3 edit, a future FastAPI edit
-endpoint) is invisible to DynamoDB. This is worse than just "goes stale":
-`update_summary` (`tools/notes.py:241-255`) rebuilds `title`/`tags`/`date`
-in the regenerated frontmatter from the DynamoDB item, not from whatever is
-currently in S3 — so a hand-edited title/tags gets silently reverted the
-next time an unrelated `update_summary` call touches that note (e.g.
-because it joined a different cluster). This is backwards from the
-"S3 is source of truth... no clobbering risk" principle in the root
-`CLAUDE.md`, which currently only covers frontmatter *connections*, not
-title/tags/date.
+`update_summary`'s clobber bug is fixed: it now reuses `write_edge`'s
+`_parse_frontmatter`/`_render_frontmatter` helpers to regenerate frontmatter
+from the current **S3** copy, only touching `grounded_in`, instead of
+rebuilding `title`/`tags`/`date` from the (possibly stale) DynamoDB item.
+Verified against a real summary card — hand-edited its title directly in
+S3, called `update_summary`, confirmed the hand-edit survived (it would
+previously have been silently reverted to DynamoDB's value).
+
+The broader reconciliation gap below is still open — DynamoDB `items` is
+only ever written by `write_note` and `update_summary`, so any edit made
+outside those two tools (Obsidian sync after `aws s3 sync`, a direct S3
+edit, a future FastAPI edit endpoint) is still invisible to DynamoDB. That
+half needs the S3 Event Notification → Lambda described below.
 
 Same root cause also means KB reindexing is manual-only (`trigger_kb_sync`
 is an agent `@tool`, not an S3 event trigger, so direct content edits sit
