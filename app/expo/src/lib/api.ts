@@ -18,7 +18,14 @@ export async function clearApiKey(): Promise<void> {
   await SecureStore.deleteItemAsync(API_KEY_STORE_KEY);
 }
 
-export type IngestPayload = { text: string } | { url: string };
+export type IngestMode = 'auto' | 'single' | 'all';
+
+export type IngestOptions = {
+  mode?: IngestMode;
+  topic?: string;
+};
+
+export type IngestPayload = ({ text: string } | { url: string }) & IngestOptions;
 
 export type IngestResult =
   | { ok: true; sessionId: string }

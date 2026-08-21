@@ -6,10 +6,19 @@ EdgeType = Literal["SUPPORTS", "CONTRADICTS", "EXTENDS", "RELATED_TO", "GROUNDED
 ItemType = Literal["literature-note", "summary-card", "permanent-note"]
 
 
+IngestMode = Literal["auto", "single", "all"]
+
+
 class IngestRequest(BaseModel):
     text: str | None = Field(None, max_length=200_000)
     url: HttpUrl | None = None
     research: bool = False
+    # auto: agent's own single-vs-multi-idea judgment (default, unchanged behavior).
+    # single: force exactly one note — `topic` picks the angle, or the agent
+    #   picks the single most central idea if `topic` is omitted.
+    # all: force extracting every distinct idea into its own note.
+    mode: IngestMode = "auto"
+    topic: str | None = Field(None, max_length=200)
 
     @model_validator(mode="after")
     def one_of_text_or_url(self):

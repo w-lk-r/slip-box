@@ -9,10 +9,27 @@ from models import IngestRequest, IngestResponse
 router = APIRouter()
 
 
+def _mode_instruction(req: IngestRequest) -> str:
+    if req.mode == "single":
+        if req.topic:
+            return (
+                f"Create exactly ONE atomic note from this source, focused specifically on: {req.topic}. "
+                "Ignore other ideas in the source that aren't about this topic."
+            )
+        return (
+            "Create exactly ONE atomic note from this source. Pick the single most important or central "
+            "idea and write about only that one — do not create multiple notes even if the source touches "
+            "on several ideas."
+        )
+    if req.mode == "all":
+        return "Extract ALL the distinct key ideas from this source and create one atomic note per idea."
+    return ""  # auto — agent's own default judgment, unchanged
+
+
 def _build_prompt(req: IngestRequest) -> str:
-    if req.text:
-        return req.text
-    return f"Ingest this URL: {req.url}"
+    source = req.text if req.text else f"Ingest this URL: {req.url}"
+    instruction = _mode_instruction(req)
+    return f"{instruction}\n\n{source}" if instruction else source
 
 
 @router.post("/ingest", status_code=202, response_model=IngestResponse)
