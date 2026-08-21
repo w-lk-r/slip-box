@@ -20,15 +20,35 @@ npm run dev
 
 Open `http://localhost:3000` — click a node for its full note detail, click an edge to change its type or delete it.
 
-## Deploy
+## Deploy (AWS Amplify Hosting)
 
-Not yet connected to hosting. Per root `CLAUDE.md`, target is AWS Amplify Hosting (Gen 2, officially supports Next.js App Router). Connecting the GitHub repo and setting `API_KEY` in the Amplify Console's environment variables is an interactive AWS-console step — see `docs/build-log.md` for the handoff note.
+Defined as code in `agentcore/cdk/lib/amplify-stack.ts` (Gen 2, `WEB_COMPUTE` platform — officially supports Next.js App Router SSR/Route Handlers). One piece can't be IaC'd: connecting to GitHub needs a Personal Access Token, since that's you authorizing AWS to access your own GitHub account — same shape as `eas build` needing your Apple credentials.
+
+**One-time: generate a GitHub PAT.** GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → New token, scoped to just the `slip-box` repo, with **Contents: Read** and **Webhooks: Read and write** permissions (Amplify needs Webhooks to auto-deploy on push). CloudFormation does not persist this token beyond establishing the connection.
+
+**Deploy:**
+```bash
+cd agentcore/cdk
+export GITHUB_TOKEN=<the PAT above>
+export API_KEY=<same value as .env.local — the API Gateway DemoKey>
+export AMPLIFY_BASIC_AUTH_PASSWORD=<pick a password>   # gates the whole site, see below
+npm run deploy:amplify
+```
+
+The stack outputs the app's default domain (`https://main.<app-id>.amplifyapp.com`). First deploy triggers Amplify's initial build automatically; every push to `main` after that redeploys via the webhook.
+
+**Site-wide HTTP Basic Auth is mandatory, not optional.** The `API_KEY` env var only protects the AWS backend from unauthorized direct calls — it does nothing to stop anyone who finds the Amplify URL from viewing the pages themselves (your actual note content) or using the edge-correction UI. `AMPLIFY_BASIC_AUTH_PASSWORD` sets a username/password (`slipbox` / whatever you chose) that the browser prompts for before loading anything — set via `basicAuthConfig` in the CDK stack, enforced by Amplify Hosting itself, transmitted over HTTPS (Amplify Hosting is HTTPS-only by default). This is "good enough for a single-user demo," not real per-user auth — that arrives with multi-user support, see `docs/future-scope.md`.
+
+To re-run later without re-exporting everything, keep those three values in your shell profile or a password manager — they're not stored in the repo or echoed back by `cdk deploy` (only the app ID, default domain, and basic-auth *username* are printed as outputs).
 
 ## Structure
 
 - `app/page.tsx` — Client Component, `next/dynamic(..., { ssr: false })`-loads `GraphView` (canvas-based graph libraries are hard client-only; in this Next.js version `ssr: false` is only permitted inside a Client Component, not a Server Component, hence `page.tsx` itself being `"use client"`)
-- `components/GraphView.tsx` — `react-force-graph-2d`, node/edge coloring by type, edge dashing for lower-confidence edges
-- `components/NodePanel.tsx` / `components/EdgePanel.tsx` — click-through detail and correction UI
+- `components/GraphView.tsx` — `react-force-graph-2d`, node/edge coloring by type, edge dashing for lower-confidence edges, hover tooltips on both nodes and edges
+- `components/NoteCard.tsx` — shared note renderer (title/type/date/tags/body), used by both panels below
+- `components/NodePanel.tsx` — click a node → full note detail via `NoteCard`
+- `components/EdgePanel.tsx` — click an edge → both connected notes (via `NoteCard`) with a visual connector carrying the type/confidence + change/delete controls; note titles are clickable to drill into that note's own `NodePanel` view
 - `app/api/graph`, `app/api/items/[noteId]`, `app/api/edges/[fromId]/[edgeId]` — Route Handlers proxying to the backend
 - `lib/backend.ts` — shared server-only fetch helper (attaches `x-api-key`)
+- `lib/useItem.ts` — shared fetch-by-`note_id` hook (`EdgePanel` needs it twice, once per endpoint)
 - `lib/types.ts` — types mirroring the backend's response shapes
