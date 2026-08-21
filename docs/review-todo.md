@@ -1,7 +1,7 @@
 # Review TODO — Metadata & Provenance Gaps
 
 Findings from a review of what's actually implemented in `app/MyAgent/` vs. what
-`CLAUDE.md` and `docs/hackathon-brief.md` describe. These are cases where the
+`CLAUDE.md` describes. These are cases where the
 design treats something as a structured, linkable piece of data, but the code
 currently drops it to a flat string, an empty placeholder, or nothing at all.
 Ordered by priority.

@@ -6,17 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Slip Box is a multi-agent "second brain" built with the AWS Strands Agents SDK and hosted on AgentCore Runtime. It ingests sources (articles, YouTube, PDF, plain text), classifies typed relationships between them (SUPPORTS / CONTRADICTS / EXTENDS), and maintains a graph of those connections in Amazon Neptune. All edges are auto-written; confidence score is stored as metadata and surfaced visually in the graph (low-confidence edges render differently) so the user can correct anything they disagree with.
 
-Full design rationale is in [`docs/hackathon-brief.md`](docs/hackathon-brief.md). AgentCore config and CLI reference is in [`AGENTS.md`](AGENTS.md).
+Architecture and design decisions live in this file (below) and in [`docs/build-log.md`](docs/build-log.md) (chronological). The original hackathon pitch/submission strategy is in [`docs/hackathon-pitch.md`](docs/hackathon-pitch.md). AgentCore config and CLI reference is in [`AGENTS.md`](AGENTS.md).
 
 ## Project Structure
 
 ```
 slip-box/
-├── agentcore/          # AgentCore config and CDK (managed by agentcore CLI)
-├── app/MyAgent/        # Strands agent code — main.py is the entrypoint
-├── docs/               # Design docs and hackathon brief
-├── AGENTS.md           # AgentCore CLI and schema reference
-└── CLAUDE.md           # This file
+├── agentcore/           # AgentCore config and CDK (managed by agentcore CLI)
+├── app/MyAgent/         # Strands agent code — main.py is the entrypoint
+├── docs/                # Design docs, build log, diagrams
+│   └── diagrams/        # Generated architecture diagram(s)
+├── scripts/             # Standalone utility scripts (backfill, diagram generation)
+├── AGENTS.md            # AgentCore CLI and schema reference
+└── CLAUDE.md            # This file
 ```
 
 ## Environment Setup
@@ -72,6 +74,10 @@ Custom tools follow the same pattern as standard Strands: `@tool` decorator, typ
 **Default build type is CodeZip** (source packaged as zip, no Docker required). Container build is opt-in via `agentcore.json`.
 
 ## Architecture
+
+![Slip Box architecture diagram](docs/diagrams/architecture.png)
+
+*Solid lines are live today; dashed/dotted are planned (frontend, split-out agents, Neptune). Regenerate with `uv run python scripts/generate_architecture_diagram.py` (run from `app/MyAgent/` so it picks up the venv) after any change to what's actually wired up.*
 
 ### Multi-agent design
 

@@ -85,6 +85,8 @@ Chronological record of decisions and progress.
 - `agentcore deploy` run (Jonathan, via `agentcore deploy --yes` — non-interactive flag needed since `!`-prefixed shell commands aren't a TTY)
 - Verified against the live deployed runtime with `agentcore invoke`: new note written, 3 correctly-typed edges created (SUPPORTS, EXTENDS ×2), no `GROUNDED_IN` misuse, frontmatter regenerated with `[[note_id|Title]]` wikilinks, note also picked up by `update_summary` into an existing cluster. `slip-box-edges` now has 6 rows total, all valid.
 
+- Docs cleanup: renamed `docs/hackathon-brief.md` → `docs/hackathon-pitch.md` and trimmed it to pitch/submission content only (judging strategy, blog tracker, timeline) — its architecture/storage/taxonomy sections had drifted from reality (arm64 container build vs. actual CodeZip, draft-state summary cards vs. actual no-draft-state) and were fully superseded by root `CLAUDE.md`, which is now the single architecture reference. Moved `docs/diagram.py` → `scripts/generate_architecture_diagram.py` (repo's existing convention for standalone scripts) and its output to `docs/diagrams/architecture.png`; regenerated to reflect current reality — single ingestion agent with its real tools, live DynamoDB `edges` table, Neptune/other agents/frontend clearly marked as planned rather than shown as built. Embedded the diagram in root `CLAUDE.md`'s Architecture section. Fixed README's description of edges, which still described a dropped pending-review-queue design.
+
 ## Up Next
 
 - [ ] Back-port the S3-not-DynamoDB frontmatter-read fix from `write_edge`'s `_regenerate_note_links` into `update_summary` (review-todo #9) — still rebuilds title/tags/date from DynamoDB there

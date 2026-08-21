@@ -43,7 +43,8 @@ slip-box/
 │   └── cdk/                # AWS CDK project (@aws/agentcore-cdk L3 constructs)
 ├── app/
 │   └── MyAgent/            # Strands agent — main.py is the entrypoint
-└── docs/                   # Design docs and hackathon brief
+├── scripts/                # Standalone utility scripts (backfill, diagram generation)
+└── docs/                   # Design docs, build log, diagrams
 ```
 
 ## Schema Reference

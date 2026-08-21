@@ -8,15 +8,15 @@ Built for the [Agents for Humans Hackathon](https://agentsforhumans.devpost.com)
 
 ## The Problem
 
-Tools like Obsidian and physical Zettelkasten slip-boxes get abandoned because managing the system costs more than using it. NotebookLM, Mem, and Sinapsus show you *similarity* — Slip Box shows **typed relationships** (SUPPORTS / CONTRADICTS / EXTENDS) and reasons about *how* things relate. Ambiguous edges are surfaced for human review rather than silently written to the graph.
+Tools like Obsidian and physical Zettelkasten slip-boxes get abandoned because managing the system costs more than using it. NotebookLM, Mem, and Sinapsus show you *similarity* — Slip Box shows **typed relationships** (SUPPORTS / CONTRADICTS / EXTENDS) and reasons about *how* things relate. Edges are auto-written above a confidence threshold and dropped below it — no queue, no noise — with confidence stored as metadata so low-confidence edges can render differently in the graph for the user to correct inline.
 
 ## Two Modes
 
-**Default:** send a source → embed → auto-match → connections written or queued for review. Fast, always-on.
+**Default:** send a source → embed → auto-match → confident connections written straight to the graph. Fast, always-on.
 
 **`--research` flag:** same ingestion, but the agent fans out to find corroborating and contradicting material before folding results into the graph. Slower and deliberate.
 
-See [`docs/hackathon-brief.md`](docs/hackathon-brief.md) for full architecture and design decisions.
+See the root [`CLAUDE.md`](CLAUDE.md) for full architecture and design decisions, and [`docs/build-log.md`](docs/build-log.md) for the build's chronological progress.
 
 ## Getting Started
 
