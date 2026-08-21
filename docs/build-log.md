@@ -118,10 +118,12 @@ Chronological record of decisions and progress.
 - Verified before handing off the actual native build: `tsc --noEmit` clean, `expo export --platform web` bundles all three routes with no errors, `expo-doctor` 21/21 checks passed.
 - **YouTube transcript quality explicitly out of scope for this pass** — sharing a YouTube link works mechanically (hits `/ingest` → the agent's `fetch_url`), but `fetch_url` just strips HTML off a JS-rendered watch page today, so it won't produce a real transcript. That's `review-todo.md` #6, recommended as the very next thing to pick up so "share from YouTube" is actually good, not just technically working.
 - Not yet built (this device): `eas build --profile development --platform ios/android` needs to run under Jonathan's own Apple/Expo credentials — see `app/expo/README.md` for the full one-time setup.
+- Built, dev-build installed, and verified end-to-end on real content: shared the hackathon's own Devpost page from Safari → 202 instantly → agent split it into 16 atomic notes with 9 typed edges (mostly `EXTENDS` within the new batch, plus 2 `RELATED_TO` edges out to pre-existing corpus notes) → all visible via `/items`/`/graph`.
+- Fixed a real bug hit on first share: iOS's `expo-share-intent` extension hands off via a deep link (`slipboxmobile://dataUrl=...`) that Expo Router doesn't recognize as a route, showing "Unmatched Route". Fixed with the `+native-intent.ts` convention file (redirects that path to `/share` before routing) — pure JS/TS, no rebuild needed, just a dev-client reload.
+- Added `recent.tsx` — a simple recent-notes list (`GET /items`, pull-to-refresh, sorted client-side by `created_at`), linked from the home screen. First slice of the "read-only browse" half of the thin-Expo-app scope that was deferred initially; still no note detail view or graph rendering, just a title/type/date list.
 
 ## Up Next
 
-- [ ] Run `eas build --profile development` (both platforms) and verify the share-sheet flow end-to-end on-device (`app/expo/README.md`)
 - [ ] Fix `fetch_url`'s YouTube handling (review-todo #6) — the natural follow-up to the share app, since YouTube is the explicitly-named near-term want
 - [ ] Classification agent as its own pass — split out of the ingestion agent once it's doing more than "score what I just found," e.g. re-scoring on demand ("what else is this connected to?")
 - [ ] Next.js frontend — two MVP screens: Ingest + permanent note editor (selection-first flow), Graph view with collapsible summary card clusters and inline edge editing

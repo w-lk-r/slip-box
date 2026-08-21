@@ -25,6 +25,7 @@ export default function RootLayout() {
         <ShareIntentListener />
         <Stack>
           <Stack.Screen name="index" options={{ title: 'Slip Box' }} />
+          <Stack.Screen name="recent" options={{ title: 'Recent Notes' }} />
           <Stack.Screen name="settings" options={{ title: 'Settings', presentation: 'modal' }} />
           <Stack.Screen name="share" options={{ title: 'Add to Slip Box', presentation: 'modal' }} />
         </Stack>

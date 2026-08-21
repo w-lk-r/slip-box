@@ -35,6 +35,9 @@ export default function HomeScreen() {
           </ThemedView>
         )}
 
+        <Link href="/recent" style={styles.link}>
+          <ThemedText type="linkPrimary">Recent notes</ThemedText>
+        </Link>
         <Link href="/settings" style={styles.link}>
           <ThemedText type="linkPrimary">Settings</ThemedText>
         </Link>
