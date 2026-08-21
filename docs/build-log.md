@@ -110,7 +110,18 @@ Chronological record of decisions and progress.
 
 - Fixed `update_summary`'s clobber bug (review-todo #9): it now reuses `write_edge`'s `_parse_frontmatter`/`_render_frontmatter` helpers to regenerate frontmatter from S3, only touching `grounded_in`, instead of rebuilding `title`/`tags`/`date` from DynamoDB. Verified live — hand-edited a real summary card's title directly in S3, ran `update_summary`, confirmed the hand-edit survived (previously would've been silently reverted), then restored the original.
 
+## Week 3 — Expo Share-Sheet App (Aug 21, 2026)
+
+- Scaffolded `app/expo/` — Expo Router app, trimmed down from the default tab-demo template to just what's needed (kept the reusable theming primitives, dropped the tab nav/animated-splash/demo screens). Config: `expo-share-intent` (App Group share extension for iOS, `ACTION_SEND` intent filter for Android — both platforms via one package, one config plugin) + `expo-secure-store` for the API key, `expo-dev-client` since native config plugins mean Expo Go can't run this app at all.
+- Researched current (SDK 57) Expo share-extension landscape before building: confirmed `expo-share-intent` v8 is the right call over the iOS-only `expo-share-extension` package (no Android story, unconfirmed `fetch()`-from-extension behavior) given both platforms are in scope; confirmed EAS dev build + (already-active) paid Apple Developer account are hard requirements, not optional; confirmed `expo-secure-store` over EAS-baked env vars for the API key (env vars compile into the JS bundle as plaintext — wrong call for a credential, and would need a rebuild to rotate).
+- Three screens: `index.tsx` (home, shows API-key status), `settings.tsx` (one-time key entry → SecureStore), `share.tsx` (shows the detected URL/text, sends to `POST /ingest`, shows sent/error state). `lib/shareIntent.ts` maps the package's `{text, webUrl}` shape to the API's `{url} | {text}` payload — including a bare-URL regex check on `text`, since some apps share links as plain text rather than populating `webUrl`.
+- Verified before handing off the actual native build: `tsc --noEmit` clean, `expo export --platform web` bundles all three routes with no errors, `expo-doctor` 21/21 checks passed.
+- **YouTube transcript quality explicitly out of scope for this pass** — sharing a YouTube link works mechanically (hits `/ingest` → the agent's `fetch_url`), but `fetch_url` just strips HTML off a JS-rendered watch page today, so it won't produce a real transcript. That's `review-todo.md` #6, recommended as the very next thing to pick up so "share from YouTube" is actually good, not just technically working.
+- Not yet built (this device): `eas build --profile development --platform ios/android` needs to run under Jonathan's own Apple/Expo credentials — see `app/expo/README.md` for the full one-time setup.
+
 ## Up Next
 
+- [ ] Run `eas build --profile development` (both platforms) and verify the share-sheet flow end-to-end on-device (`app/expo/README.md`)
+- [ ] Fix `fetch_url`'s YouTube handling (review-todo #6) — the natural follow-up to the share app, since YouTube is the explicitly-named near-term want
 - [ ] Classification agent as its own pass — split out of the ingestion agent once it's doing more than "score what I just found," e.g. re-scoring on demand ("what else is this connected to?")
 - [ ] Next.js frontend — two MVP screens: Ingest + permanent note editor (selection-first flow), Graph view with collapsible summary card clusters and inline edge editing

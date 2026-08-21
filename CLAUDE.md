@@ -13,7 +13,10 @@ Architecture and design decisions live in this file (below) and in [`docs/build-
 ```
 slip-box/
 ├── agentcore/           # AgentCore config and CDK (managed by agentcore CLI)
-├── app/MyAgent/         # Strands agent code — main.py is the entrypoint
+├── app/
+│   ├── MyAgent/         # Strands agent code — main.py is the entrypoint
+│   ├── api/             # FastAPI backend — Lambda + API Gateway (agentcore/cdk/lib/api-stack.ts)
+│   └── expo/            # Mobile app — share-sheet capture (see app/expo/README.md)
 ├── docs/                # Design docs, build log, diagrams
 │   └── diagrams/        # Generated architecture diagram(s)
 ├── scripts/             # Standalone utility scripts (backfill, diagram generation)
