@@ -77,12 +77,21 @@ that's later hand-edited, but there's no update tool for `Item` notes at all
 (only `update_summary` exists for summary cards). The flag has nowhere to be
 set.
 
-## 6. `fetch_url` has no content-type handling
+## 6. `fetch_url` has no content-type handling — YouTube half RESOLVED 2026-08-21
 
-Blind regex HTML-stripping on whatever `httpx` returns — no branch for PDF
-or YouTube, even though both are named as first-class source types in the
-hackathon brief. A PDF or YouTube URL would get mangled rather than routed
-to a proper extractor (YouTube transcript API, PDF text extraction).
+YouTube is fixed: `fetch_url` detects `youtube.com/watch|shorts|embed|live`
+and `youtu.be` URLs and routes to a private `_fetch_youtube` helper —
+transcript via `youtube-transcript-api` (no API key, timedtext endpoint)
+plus title/channel via YouTube's oEmbed endpoint — instead of blindly
+HTML-stripping the JS-rendered watch page, which returned nothing usable.
+No agent-facing change; `fetch_url`'s signature/tool contract is unchanged,
+the routing is internal. Verified against the live deployed stack — real
+transcript content, correct title/channel attribution, sensible tags. See
+`docs/build-log.md`.
+
+PDF is still unhandled — blind regex HTML-stripping on whatever `httpx`
+returns, no branch for PDF text extraction. A PDF URL would still get
+mangled rather than routed to a proper extractor.
 
 ## 7. Research agent (`--research` fan-out) doesn't exist yet — design notes for when it's built
 

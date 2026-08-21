@@ -4,6 +4,7 @@ import json
 import datetime
 import logging
 import os
+import urllib.parse
 from decimal import Decimal
 
 import boto3
@@ -11,6 +12,7 @@ import httpx
 from boto3.dynamodb.conditions import Key
 from dotenv import load_dotenv
 from strands import tool
+from youtube_transcript_api import CouldNotRetrieveTranscript, YouTubeTranscriptApi
 
 from config import EDGE_CONFIDENCE_THRESHOLD, FETCH_URL_MAX_CHARS, KB_RETRIEVE_TOP_K
 
@@ -453,18 +455,78 @@ def trigger_kb_sync() -> str:
     return job_id
 
 
+def _youtube_video_id(url: str) -> str | None:
+    """Extract the video ID from watch/shorts/embed/live/youtu.be URL shapes."""
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc.lower()
+    for prefix in ("www.", "m.", "music."):
+        host = host.removeprefix(prefix)
+    if host == "youtu.be":
+        return parsed.path.lstrip("/").split("/")[0] or None
+    if host == "youtube.com":
+        if parsed.path == "/watch":
+            return urllib.parse.parse_qs(parsed.query).get("v", [None])[0]
+        for prefix in ("/shorts/", "/embed/", "/live/"):
+            if parsed.path.startswith(prefix):
+                return parsed.path[len(prefix):].split("/")[0] or None
+    return None
+
+
+def _fetch_youtube(video_id: str, original_url: str) -> str:
+    """
+    Transcript (via youtube-transcript-api's timedtext endpoint, no API key
+    needed) plus title/channel (via YouTube's oEmbed endpoint) — replaces
+    fetch_url's default HTML-strip, which returns nothing usable against a
+    JS-rendered watch page.
+    """
+    title, channel = None, None
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.get(
+                "https://www.youtube.com/oembed",
+                params={"url": original_url, "format": "json"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                title, channel = data.get("title"), data.get("author_name")
+    except httpx.HTTPError:
+        pass
+
+    header = f"Title: {title}\nChannel: {channel}\n\n" if title else ""
+
+    try:
+        transcript = YouTubeTranscriptApi().fetch(video_id)
+        text = " ".join(snippet.text for snippet in transcript)
+    except CouldNotRetrieveTranscript:
+        if not title:
+            raise
+        log.info(f"No YouTube transcript available for {video_id}, falling back to title/channel only")
+        return (header + "No transcript is available for this video — write the note from "
+                          "the title/channel alone if that's enough, or tell the user none was found.")[:FETCH_URL_MAX_CHARS]
+
+    return (header + text)[:FETCH_URL_MAX_CHARS]
+
+
 @tool
 def fetch_url(url: str) -> str:
     """
     Fetch the text content of a URL for ingestion.
     Use this when the user provides a URL rather than pasting content directly.
+    YouTube URLs (youtube.com/watch, youtu.be, /shorts/, /embed/, /live/) are
+    detected automatically and return the video's transcript plus title/channel
+    instead of raw watch-page HTML, which is JS-rendered and not scrapeable.
 
     Args:
         url: The URL to fetch
 
     Returns:
-        Page text content (HTML tags stripped, capped at 50k characters)
+        Page text content (HTML tags stripped, capped at 50k characters), or a
+        YouTube transcript for video URLs
     """
+    video_id = _youtube_video_id(url)
+    if video_id:
+        return _fetch_youtube(video_id, url)
+
     with httpx.Client(follow_redirects=True, timeout=30) as client:
         response = client.get(url, headers={"User-Agent": "SlipBox/1.0"})
         response.raise_for_status()
