@@ -79,7 +79,10 @@ export class ApiStack extends Stack {
       new iam.PolicyStatement({
         sid: 'ItemsRead',
         actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:Scan'],
-        resources: ['arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-items'],
+        resources: [
+          'arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-items',
+          'arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-items/index/recent-index',
+        ],
       })
     );
     apiFn.addToRolePolicy(

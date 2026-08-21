@@ -203,6 +203,7 @@ related_to: []
         "date": today,
         "tags": tags,
         "created_at": datetime.datetime.utcnow().isoformat(),
+        "gsi_pk": "item",  # constant partition key for recent-index — see app-stack.ts
     })
 
     log.info(f"Written note: {s3_key}")
@@ -371,6 +372,7 @@ related_to: []
         "date": today,
         "tags": tags,
         "created_at": datetime.datetime.utcnow().isoformat(),
+        "gsi_pk": "item",  # constant partition key for recent-index — see app-stack.ts
     })
 
     # GROUNDED_IN edges are deterministic cluster membership, not a scored

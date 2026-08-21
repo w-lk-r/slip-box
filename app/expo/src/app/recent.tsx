@@ -39,8 +39,9 @@ function sectionTitle(key: string): string {
   });
 }
 
-// Pages are raw DynamoDB scan chunks, not chronologically ordered — always
-// sort the full accumulated set before grouping, don't assume page order.
+// The backend now queries a GSI sorted by created_at, so pages already
+// arrive newest-first — this re-sort is just a cheap safety net, not load-
+// bearing, in case that ever changes.
 function groupByDate(items: Item[]): { title: string; data: Item[] }[] {
   const sorted = [...items].sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''));
   const groups = new Map<string, Item[]>();

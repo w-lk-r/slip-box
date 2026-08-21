@@ -1,7 +1,7 @@
 import base64
 import json
 
-from boto3.dynamodb.conditions import Attr
+from boto3.dynamodb.conditions import Attr, Key
 from fastapi import APIRouter, HTTPException, Query
 
 from clients import S3_BUCKET, items_table, s3
@@ -22,14 +22,25 @@ def _decode_cursor(cursor: str) -> dict:
 
 @router.get("/items")
 def list_items(type: ItemType | None = None, limit: int = Query(100, ge=1, le=500), cursor: str | None = None):
-    kwargs = {"Limit": limit}
+    # Query recent-index (gsi_pk is a constant — see app-stack.ts) instead of
+    # Scan, which has no ordering guarantee at all. Sorted newest-first via
+    # the index's created_at sort key.
+    kwargs = {
+        "IndexName": "recent-index",
+        "KeyConditionExpression": Key("gsi_pk").eq("item"),
+        "ScanIndexForward": False,
+        "Limit": limit,
+    }
     if type:
         kwargs["FilterExpression"] = Attr("type").eq(type)
     if cursor:
         kwargs["ExclusiveStartKey"] = _decode_cursor(cursor)
 
-    response = items_table.scan(**kwargs)
-    result = {"items": clean(response.get("Items", []))}
+    response = items_table.query(**kwargs)
+    items = clean(response.get("Items", []))
+    for item in items:
+        item.pop("gsi_pk", None)
+    result = {"items": items}
     if "LastEvaluatedKey" in response:
         result["cursor"] = _encode_cursor(response["LastEvaluatedKey"])
     return result
