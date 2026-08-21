@@ -77,17 +77,28 @@ that's later hand-edited, but there's no update tool for `Item` notes at all
 (only `update_summary` exists for summary cards). The flag has nowhere to be
 set.
 
-## 6. `fetch_url` has no content-type handling — YouTube half RESOLVED 2026-08-21
+## 6. `fetch_url` has no content-type handling — YouTube half RESOLVED 2026-08-21 (moved client-side)
 
-YouTube is fixed: `fetch_url` detects `youtube.com/watch|shorts|embed|live`
-and `youtu.be` URLs and routes to a private `_fetch_youtube` helper —
-transcript via `youtube-transcript-api` (no API key, timedtext endpoint)
-plus title/channel via YouTube's oEmbed endpoint — instead of blindly
-HTML-stripping the JS-rendered watch page, which returned nothing usable.
-No agent-facing change; `fetch_url`'s signature/tool contract is unchanged,
-the routing is internal. Verified against the live deployed stack — real
-transcript content, correct title/channel attribution, sensible tags. See
-`docs/build-log.md`.
+First pass added YouTube handling straight to `fetch_url` (`_fetch_youtube` —
+`youtube-transcript-api` + oEmbed), which worked from a local dev machine but
+failed for real in production: `youtube-transcript-api`'s own docs turned out
+to be right that YouTube blanket-blocks the transcript endpoint from cloud
+provider IPs, AWS included (confirmed via CloudWatch — the exact `RequestBlocked`
+exception the library documents). No proxy signup was wanted for this, so the
+transcript fetch moved to where it isn't blocked: the Expo app fetches it
+client-side over the phone's own network connection (`app/expo/src/lib/youtube.ts`,
+using the `youtube-transcript` npm package — pure `fetch()`-based, no Node
+dependency, confirmed RN/Metro-bundle-compatible) before calling `/ingest`.
+
+This needed a small API contract addition since `text`/`url` were previously
+mutually exclusive with no way to attribute a client-fetched transcript to its
+real source: `IngestRequest` gained an optional `source_url` field, valid only
+alongside `text`, which `_build_prompt` (`app/api/routers/ingest.py`) turns
+into an instruction telling the agent to pass it straight to `write_note`
+rather than re-fetch it. `fetch_url`'s own YouTube handling stays in place as
+a fallback for any non-mobile ingestion path, and as what a share still
+degrades to if the client-side fetch itself fails. Verified end-to-end against
+the live deployed stack in both directions — see `docs/build-log.md`.
 
 PDF is still unhandled — blind regex HTML-stripping on whatever `httpx`
 returns, no branch for PDF text extraction. A PDF URL would still get

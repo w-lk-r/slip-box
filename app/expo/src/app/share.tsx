@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { useShareIntentContext } from 'expo-share-intent';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -10,6 +10,7 @@ import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { ingest, type IngestMode, type IngestPayload } from '@/lib/api';
 import { toIngestPayload } from '@/lib/shareIntent';
+import { fetchYoutubeContent, isYoutubeUrl, type YoutubeContent } from '@/lib/youtube';
 
 type Status = 'idle' | 'sending' | 'sent' | 'error';
 
@@ -49,14 +50,35 @@ export default function ShareScreen() {
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<IngestMode>('auto');
   const [topic, setTopic] = useState('');
+  const [youtubeContent, setYoutubeContent] = useState<YoutubeContent | null>(null);
+  const [youtubeLoading, setYoutubeLoading] = useState(false);
 
   const basePayload = toIngestPayload(shareIntent);
+  const shareUrl = basePayload && 'url' in basePayload ? basePayload.url : null;
+
+  // A shared link that's YouTube gets its transcript fetched from the phone's
+  // own network connection before send — AWS's IPs are blocked by YouTube's
+  // transcript endpoint, the phone's aren't. Falls back to the raw URL (and
+  // the backend's own graceful "no transcript" handling) if this fails.
+  useEffect(() => {
+    setYoutubeContent(null);
+    if (shareUrl && isYoutubeUrl(shareUrl)) {
+      setYoutubeLoading(true);
+      fetchYoutubeContent(shareUrl)
+        .then(setYoutubeContent)
+        .finally(() => setYoutubeLoading(false));
+    }
+  }, [shareUrl]);
+
+  const topicValue = mode === 'single' && topic.trim() ? topic.trim() : undefined;
   const payload: IngestPayload | null = basePayload
-    ? { ...basePayload, mode, topic: mode === 'single' && topic.trim() ? topic.trim() : undefined }
+    ? youtubeContent
+      ? { text: youtubeContent.text, source_url: youtubeContent.sourceUrl, mode, topic: topicValue }
+      : { ...basePayload, mode, topic: topicValue }
     : null;
 
   async function handleSend() {
-    if (!payload) return;
+    if (!payload || youtubeLoading) return;
     setStatus('sending');
     const result = await ingest(payload);
     if (result.ok) {
@@ -82,12 +104,26 @@ export default function ShareScreen() {
         {basePayload && status === 'idle' && (
           <>
             <ThemedText type="smallBold">
-              {'url' in basePayload ? 'Link detected' : 'Text detected'}
+              {youtubeContent
+                ? 'YouTube transcript fetched'
+                : youtubeLoading
+                  ? 'Fetching YouTube transcript…'
+                  : 'url' in basePayload
+                    ? 'Link detected'
+                    : 'Text detected'}
             </ThemedText>
             <ThemedView type="backgroundElement" style={styles.preview}>
-              <ThemedText numberOfLines={6}>
-                {'url' in basePayload ? basePayload.url : basePayload.text}
-              </ThemedText>
+              {youtubeLoading ? (
+                <ActivityIndicator />
+              ) : (
+                <ThemedText numberOfLines={6}>
+                  {youtubeContent
+                    ? youtubeContent.text
+                    : 'url' in basePayload
+                      ? basePayload.url
+                      : basePayload.text}
+                </ThemedText>
+              )}
             </ThemedView>
 
             <ThemedText type="small" themeColor="textSecondary">
@@ -108,7 +144,12 @@ export default function ShareScreen() {
               />
             )}
 
-            <ThemedText type="link" onPress={handleSend} style={styles.action}>
+            <ThemedText
+              type="link"
+              onPress={youtubeLoading ? undefined : handleSend}
+              themeColor={youtubeLoading ? 'textSecondary' : undefined}
+              style={styles.action}
+            >
               Send to Slip Box
             </ThemedText>
           </>

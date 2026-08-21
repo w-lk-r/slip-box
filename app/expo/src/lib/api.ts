@@ -25,7 +25,10 @@ export type IngestOptions = {
   topic?: string;
 };
 
-export type IngestPayload = ({ text: string } | { url: string }) & IngestOptions;
+// source_url is only meaningful alongside text — for content the client
+// already fetched itself (e.g. a YouTube transcript pulled client-side, see
+// lib/youtube.ts) and wants attributed to its real source in the note.
+export type IngestPayload = ({ text: string; source_url?: string } | { url: string }) & IngestOptions;
 
 export type IngestResult =
   | { ok: true; sessionId: string }

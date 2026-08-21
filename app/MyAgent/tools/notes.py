@@ -497,10 +497,10 @@ def _fetch_youtube(video_id: str, original_url: str) -> str:
     try:
         transcript = YouTubeTranscriptApi().fetch(video_id)
         text = " ".join(snippet.text for snippet in transcript)
-    except CouldNotRetrieveTranscript:
+    except CouldNotRetrieveTranscript as e:
         if not title:
             raise
-        log.info(f"No YouTube transcript available for {video_id}, falling back to title/channel only")
+        log.info(f"No YouTube transcript available for {video_id} ({type(e).__name__}: {e}), falling back to title/channel only")
         return (header + "No transcript is available for this video — write the note from "
                           "the title/channel alone if that's enough, or tell the user none was found.")[:FETCH_URL_MAX_CHARS]
 

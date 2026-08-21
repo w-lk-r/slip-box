@@ -27,7 +27,14 @@ def _mode_instruction(req: IngestRequest) -> str:
 
 
 def _build_prompt(req: IngestRequest) -> str:
-    source = req.text if req.text else f"Ingest this URL: {req.url}"
+    if req.text:
+        source = (
+            f"Source URL (pass this as source_url to write_note — do not fetch it, "
+            f"the content below is already the full source): {req.source_url}\n\n{req.text}"
+            if req.source_url else req.text
+        )
+    else:
+        source = f"Ingest this URL: {req.url}"
     instruction = _mode_instruction(req)
     return f"{instruction}\n\n{source}" if instruction else source
 
