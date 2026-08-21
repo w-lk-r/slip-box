@@ -207,6 +207,39 @@ related_to: []
     return {"note_id": note_id, "s3_key": s3_key, "title": title}
 
 
+def _write_edge_record(from_id: str, to_id: str, edge_type: str, confidence: float, reason: str = "", regenerate: bool = True) -> str:
+    """
+    Unconditional edge write — no threshold/validation, used by write_edge (after
+    it validates) and by write_summary/update_summary for deterministic GROUNDED_IN
+    membership edges, which aren't a confidence-scored classification.
+    """
+    now = datetime.datetime.utcnow().isoformat()
+    edge_id = uuid.uuid4().hex
+    confidence_dec = Decimal(str(confidence))
+    ddb.Table(EDGES_TABLE).put_item(Item={
+        "from_id": from_id,
+        "edge_id": edge_id,
+        "to_id": to_id,
+        "type": edge_type,
+        "confidence": confidence_dec,
+        "authored_by": "model",
+        "created_at": now,
+        "history": [{"action": "created", "by": "model", "at": now, "confidence": confidence_dec, "reason": reason}],
+    })
+    if regenerate:
+        _regenerate_note_links(from_id)
+    log.info(f"Written edge: {from_id} -{edge_type}-> {to_id} ({confidence})")
+    return edge_id
+
+
+def _delete_edges_to(from_id: str, to_id: str, edge_type: str) -> None:
+    """Delete every edge from_id -edge_type-> to_id (normally just one)."""
+    edges = ddb.Table(EDGES_TABLE).query(KeyConditionExpression=Key("from_id").eq(from_id)).get("Items", [])
+    for edge in edges:
+        if edge["to_id"] == to_id and edge["type"] == edge_type:
+            ddb.Table(EDGES_TABLE).delete_item(Key={"from_id": from_id, "edge_id": edge["edge_id"]})
+
+
 @tool
 def write_edge(from_id: str, to_id: str, edge_type: str, confidence: float, reason: str = "") -> dict:
     """
@@ -245,22 +278,7 @@ def write_edge(from_id: str, to_id: str, edge_type: str, confidence: float, reas
         log.info(f"Edge dropped below threshold: {from_id} -{edge_type}-> {to_id} ({confidence})")
         return {"written": False, "reason": "below confidence threshold"}
 
-    now = datetime.datetime.utcnow().isoformat()
-    edge_id = uuid.uuid4().hex
-    confidence_dec = Decimal(str(confidence))
-    ddb.Table(EDGES_TABLE).put_item(Item={
-        "from_id": from_id,
-        "edge_id": edge_id,
-        "to_id": to_id,
-        "type": edge_type,
-        "confidence": confidence_dec,
-        "authored_by": "model",
-        "created_at": now,
-        "history": [{"action": "created", "by": "model", "at": now, "confidence": confidence_dec, "reason": reason}],
-    })
-
-    _regenerate_note_links(from_id)
-    log.info(f"Written edge: {from_id} -{edge_type}-> {to_id} ({confidence})")
+    edge_id = _write_edge_record(from_id, to_id, edge_type, confidence, reason)
     return {"written": True, "edge_id": edge_id}
 
 
@@ -353,6 +371,15 @@ related_to: []
         "created_at": datetime.datetime.utcnow().isoformat(),
     })
 
+    # GROUNDED_IN edges are deterministic cluster membership, not a scored
+    # classification — write them directly (confidence 1.0) rather than through
+    # the write_edge tool's threshold gate, which doesn't apply here. Skip the
+    # per-call frontmatter regen and do it once after the loop instead.
+    for member_id in grounded_in:
+        _write_edge_record(note_id, member_id, "GROUNDED_IN", 1.0, reason="summary card grounding", regenerate=False)
+    if grounded_in:
+        _regenerate_note_links(note_id)
+
     log.info(f"Written summary card: {s3_key}")
     return {"note_id": note_id, "s3_key": s3_key, "title": title}
 
@@ -380,6 +407,8 @@ def update_summary(summary_note_id: str, add_note_ids: list[str] = [], remove_no
         return {"error": f"Summary card {summary_note_id} not found"}
 
     current = set(item.get("grounded_in", []))
+    new_members = set(add_note_ids) - current
+    removed_members = set(remove_note_ids) & current
     current.update(add_note_ids)
     current.difference_update(remove_note_ids)
     grounded_in = list(current)
@@ -393,16 +422,17 @@ def update_summary(summary_note_id: str, add_note_ids: list[str] = [], remove_no
         },
     )
 
-    # Regenerate frontmatter from the current S3 copy, not DynamoDB — preserves
-    # any hand-edited title/tags/date instead of silently reverting them the
-    # next time an unrelated update_summary call touches this note.
-    s3_key = item["s3_key"]
-    existing = s3.get_object(Bucket=S3_BUCKET, Key=s3_key)["Body"].read().decode()
-    fields, body = _parse_frontmatter(existing)
-    fields["grounded_in"] = grounded_in
+    for member_id in new_members:
+        _write_edge_record(summary_note_id, member_id, "GROUNDED_IN", 1.0, reason="summary card grounding", regenerate=False)
+    for member_id in removed_members:
+        _delete_edges_to(summary_note_id, member_id, "GROUNDED_IN")
 
-    s3.put_object(Bucket=S3_BUCKET, Key=s3_key, Body=(_render_frontmatter(fields) + body).encode(), ContentType="text/markdown")
-    log.info(f"Updated summary card cluster: {s3_key}")
+    # Regenerates frontmatter (title/tags/date preserved) from the edges just
+    # written/deleted above, reading the current S3 copy rather than DynamoDB —
+    # preserves any hand-edited title/tags/date instead of silently reverting
+    # them the next time an unrelated update_summary call touches this note.
+    _regenerate_note_links(summary_note_id)
+    log.info(f"Updated summary card cluster: {item['s3_key']}")
     return {"note_id": summary_note_id, "grounded_in": grounded_in}
 
 
