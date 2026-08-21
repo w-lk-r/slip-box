@@ -76,14 +76,32 @@ export type Item = {
 };
 
 export type ListItemsResult =
-  | { ok: true; items: Item[] }
+  | { ok: true; items: Item[]; cursor?: string }
   | { ok: false; error: string };
 
-export async function listItems(limit = 30): Promise<ListItemsResult> {
-  const result = await apiFetch<{ items: Item[] }>(`/items?limit=${limit}`);
+/**
+ * One page of items, unsorted (backend pagination is a raw DynamoDB Scan
+ * cursor, not a chronological offset — the caller accumulates pages and
+ * sorts client-side rather than assuming each page is itself in date order).
+ */
+export async function listItems(limit = 20, cursor?: string): Promise<ListItemsResult> {
+  const query = cursor ? `?limit=${limit}&cursor=${encodeURIComponent(cursor)}` : `?limit=${limit}`;
+  const result = await apiFetch<{ items: Item[]; cursor?: string }>(`/items${query}`);
   if (!result.ok) return result;
-  const items = [...result.data.items].sort((a, b) =>
-    (b.created_at ?? '').localeCompare(a.created_at ?? '')
-  );
-  return { ok: true, items };
+  return { ok: true, items: result.data.items, cursor: result.data.cursor };
+}
+
+export type ItemDetail = Item & {
+  body: string;
+  connections: Record<string, string[]>;
+};
+
+export type GetItemResult =
+  | { ok: true; item: ItemDetail }
+  | { ok: false; error: string };
+
+export async function getItem(noteId: string): Promise<GetItemResult> {
+  const result = await apiFetch<ItemDetail>(`/items/${encodeURIComponent(noteId)}`);
+  if (!result.ok) return result;
+  return { ok: true, item: result.data };
 }
