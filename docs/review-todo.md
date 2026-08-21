@@ -27,5 +27,5 @@ CLAUDE.md currently specs Next.js/TypeScript + Amplify for the three MVP screens
 - **Graph cluster drag-and-drop (add/remove notes from a `SummaryCard` cluster) doesn't translate to touch.** Realistically mobile is view/browse-only for the graph; editing stays web-first regardless of stack.
 - **Amplify's Next.js-specific SSR support is given up** with Expo's static web export — likely a non-issue since this is an authenticated dashboard app, not SSR-dependent content pages, but worth naming as a tradeoff rather than assuming for free.
 
-**Option to weigh:** rather than one Expo codebase for everything, a *thin* separate Expo app scoped to just capture/share-sheet + read-only browse (hitting the same FastAPI backend as the Next.js web app) may cost less than fighting RN's weaker graph/editor ecosystem across `Platform.OS` branches in a single unified app — two codebases, each in its strong lane, for a solo maintainer.
+**Preferred direction:** rather than one Expo codebase for everything, a *thin* separate Expo app scoped to just capture/share-sheet + read-only browse (hitting the same FastAPI backend as the Next.js web app) — two codebases, each in its strong lane, for a solo maintainer. Leaning this way over fighting RN's weaker graph/editor ecosystem across `Platform.OS` branches in a single unified app.
 
