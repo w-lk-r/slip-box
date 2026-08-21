@@ -259,6 +259,69 @@ burn Bedrock spend or spam the KB with junk.
   not as a follow-up after `/ingest` ships open — an unauthenticated,
   unvalidated ingestion endpoint is an easy thing to demo past and forget.
 
+## 12. Local-filesystem-created notes need sidecar + frontmatter backfill + linkage triggering, not just DynamoDB reconciliation
+
+Extends #9: the S3 Event Notification → Lambda sketched there handles
+metadata reconciliation for notes the agent already wrote (backfilling
+DynamoDB when a hand-edit changes title/tags). It doesn't cover the harder
+case — a note created **entirely outside the system**, written directly in
+a local Obsidian vault, then pushed up via
+`aws s3 sync ~/ObsidianVault/SlipBox/ s3://slip-box-notes/` (the push
+direction of the one-way sync already documented in `future-scope.md`). A
+file arriving this way is missing three things the rest of the system
+assumes exist:
+
+1. **No `.md.metadata.json` sidecar** — required by the Bedrock KB to treat
+   frontmatter as filterable metadata rather than embedding it as content
+   (the sidecar requirement in root `CLAUDE.md`). A raw Obsidian file won't
+   have one.
+2. **Possibly incomplete/malformed frontmatter** — a hand-written note may
+   be missing `note_id`, `type`, `date`, or the typed link-list fields
+   (`supports: []` etc.) the rest of the system assumes are present.
+3. **No linkages** — the actual point of ingestion (typed-relationship
+   classification against the existing corpus) never ran, since the note
+   never passed through the ingestion agent's `search_notes`/`write_edge`
+   flow.
+
+**Two-stage design, split by whether an LLM is actually needed:**
+
+- **Stage 1 — Lambda-only, no agent involved** (extends #9's Lambda): on
+  `ObjectCreated`, parse frontmatter. If `note_id` is missing, generate one
+  the same way `write_note` does (`{_slugify(title)}-{uuid8}`) and rewrite
+  the file's frontmatter with it, so the S3 copy and DynamoDB agree going
+  forward. Backfill other missing required fields with sane defaults
+  (empty typed-link lists, `type: literature-note` if unspecified,
+  `authored_by: user`). Write/regenerate the `.md.metadata.json` sidecar
+  from the now-normalized frontmatter. Upsert the DynamoDB `items` row. All
+  of this is cheap, deterministic, and needs no Bedrock call.
+- **Stage 2 — needs the agent, triggered from Stage 1's Lambda**: once the
+  note is normalized and has a stable `note_id`, fire an async call into
+  the *same* invocation path `POST /ingest`'s `WorkerFunction` already uses
+  (`invoke_agent_runtime`) — but with a distinct prompt, since this note
+  already exists and shouldn't be re-written: something like "note
+  `{note_id}` was just added outside the ingestion flow — search the KB
+  and propose `write_edge` calls for how it relates to existing notes,"
+  skipping `write_note` entirely. This reuses the classification behavior
+  already built into the ingestion agent's system prompt instead of
+  duplicating search/scoring logic in the Lambda — the Lambda's job stays
+  structural normalization, the agent's job stays semantic classification,
+  matching the split #8 already argues for.
+
+**Why route through the FastAPI worker rather than a bespoke Lambda→agent
+call:** the shape needed here — invoke asynchronously, don't block on the
+LLM, IAM scoped narrowly to just `InvokeAgentRuntime` — is exactly what
+`WorkerFunction` (`app/api/worker.py`) already is. No new pattern to
+design, just a new caller and a new prompt template. The only new plumbing
+is IAM: the reconciliation Lambda needs `lambda:InvokeFunction` on
+`WorkerFunction`, the same grant `ApiFunction` already has.
+
+**Not urgent for MVP** — like #9's own fix, this only matters once
+something writes to S3 outside the agent's own tools. `PermanentNote`'s
+direct write path (frontend → FastAPI → S3+DynamoDB, no agent — still
+out of scope per the FastAPI backend plan) will exercise this before
+Obsidian sync does; worth building alongside `/notes` rather than waiting
+for local-sync specifically.
+
 ---
 
 *Recommended order: #1 unblocks #2 and is the app's core value prop. #3 and
@@ -275,7 +338,9 @@ benefits from DynamoDB being a reliable materialized view instead of a
 separately-mutated copy. #10 is downstream of #9 — don't start it first.
 #11 must land with the FastAPI backend itself, not after — the fetch_url →
 agent path is a live prompt-injection surface the moment `/ingest` is
-public.*
+public. #12 is downstream of both #9 (extends its Lambda) and the FastAPI
+backend (reuses its worker) — don't start it before either exists, and it
+has no urgency until something writes new notes to S3 outside the agent.*
 
 ---
 

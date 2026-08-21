@@ -17,8 +17,8 @@ aws s3 sync s3://slip-box-notes/ ~/ObsidianVault/SlipBox/
 - S3 sync brings those files into any local vault
 
 **What remains future work:**
-- Typed relationships (SUPPORTS / CONTRADICTS / EXTENDS) as Obsidian `[[wikilinks]]` — requires a post-processing step to rewrite edge metadata as wiki-style links
-- Two-way sync — edits made in Obsidian propagating back to the graph
+- Two-way sync — edits made in Obsidian propagating back to the graph (design notes in `docs/review-todo.md` #10)
+- Reconciling notes created directly in the local vault and pushed up via `aws s3 sync`, rather than through the ingestion agent — needs a sidecar/frontmatter backfill and a way to trigger classification after the fact (design notes in `docs/review-todo.md` #12)
 
 ---
 
