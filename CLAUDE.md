@@ -123,7 +123,7 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
   - Keep the sidecar minimal: only the fields the KB needs for filtering. Full metadata lives in DynamoDB.
   - Use hierarchical/semantic chunking (not default fixed-size) for longer literature notes so retrieval doesn't cut mid-section.
 - **DynamoDB** — `items` table (structured metadata for all note types: `literature-note`, `permanent-note`) and `edges` table (`from_id`, `to_id`, `type`, `confidence`, `history`). Neptune is the production graph target but DynamoDB covers all MVP query needs (write edge, read edges by node, read all edges for graph render) without VPC complexity.
-- **Amazon Neptune** — graph DB for typed edges. Vertex types: `Item`, `Concept`, `PermanentNote`, `SummaryCard` (stretch — see Note taxonomy below), `Source`. Every vertex carries `created_at`/`updated_at` — powers the timeline/MOC view (see Frontend below). Edge types: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`
+- **Amazon Neptune** — graph DB for typed edges. Vertex types: `Item`, `Concept`, `PermanentNote`, `SummaryCard` (see Note taxonomy below), `Source`. Every vertex carries `created_at`/`updated_at` — powers the timeline/MOC view (see Frontend below). Edge types: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`
 
 ### Hosting
 
@@ -137,7 +137,7 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 - Graph visualization: `react-force-graph-2d` (the 2D-only sub-package — the combined `react-force-graph` package pulls in three.js/WebGL for 3D/VR support this project doesn't need). Node color by type, edge color by type, edge dashing below a review-worthy confidence cutoff (separate constant from `EDGE_CONFIDENCE_THRESHOLD`, which gates writes, not rendering).
 - Auth: Next.js Route Handlers as a backend-for-frontend proxy (`app/web/lib/backend.ts`) hold the API key server-side — unlike the mobile app's on-device `expo-secure-store`, a web JS bundle is inherently public, so the key never reaches the browser. The deployed app therefore never hits CORS either (same-origin); CORS is still enabled on the API Gateway (`defaultCorsPreflightOptions` in `api-stack.ts`) for local dev iteration against the live API directly.
 - Timeline mode (stretch): same graph data, laid out by `created_at` instead of force-directed, for viewing a MOC's linked notes or a note's neighborhood in chronological/insertion order
-- Hosting: AWS Amplify (Gen 2 — officially supports Next.js App Router; not yet connected, see `app/web/README.md`)
+- Hosting: AWS Amplify (Gen 2 — officially supports Next.js App Router). Set up directly via the Amplify Console rather than CDK — an earlier CDK-managed attempt hit a persistent, unresolved `Unable to assume specified IAM Role` build error even with AWS's own blessed service-role setup; see `app/web/README.md` for the working Console setup steps and `docs/build-log.md` for the debugging trail.
 
 ### Mobile
 
@@ -150,7 +150,7 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 - Custom `@tool` functions — Neptune writes, DynamoDB writes, YouTube transcript extraction, SWOT logic
 - `handoff_to_user` — confidence-gated human review
 
-### Note taxonomy: literature notes, ideas, summary cards (stretch)
+### Note taxonomy: literature notes, ideas, summary cards
 
 Not a uniform rule across all three: `Item` and `SummaryCard` are information transformation (AI doing this well doesn't undercut the method) and carry `authored_by: model | user`; `PermanentNote` is where the human forming the idea in their own words is the actual point, so it's user-authored only.
 
@@ -179,7 +179,7 @@ Not a uniform rule across all three: `Item` and `SummaryCard` are information tr
 Build in this order, get each layer solid before moving on:
 
 1. Fast-path ingestion → DynamoDB/Neptune writes
-2. Pending-edge review UI
+2. Inline edge correction UI (graph view) — pivoted away from a separate pending-review queue, see Confidence and edge correction above
 3. `--research` fan-out
 4. SWOT analysis and permanent note promotion (stretch)
 5. Frontmatter as a pending-connection review surface (stretch)

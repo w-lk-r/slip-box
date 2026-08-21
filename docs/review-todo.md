@@ -36,8 +36,10 @@ on the card" in `CLAUDE.md`).
 
 Resolved alongside #1 — `write_edge` scores and stores confidence, dropping
 below-threshold edges. The "edges near threshold render differently, user
-can correct inline" UX still has no frontend to read it (no graph view
-yet), but the data now exists.
+can correct inline" UX is now also built: the Next.js graph view
+(`app/web/`) dashes edges below a review-worthy confidence cutoff and
+`EdgePanel` lets the user change the type or delete the edge inline — see
+`docs/build-log.md` Week 3.
 
 ## 3. Source references are a flat, unstructured string
 
