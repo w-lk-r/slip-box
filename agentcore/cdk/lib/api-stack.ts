@@ -111,6 +111,17 @@ export class ApiStack extends Stack {
       proxy: true,
       apiKeySourceType: apigateway.ApiKeySourceType.HEADER,
       defaultMethodOptions: { apiKeyRequired: true },
+      // For the web app's local dev iteration against the live API directly
+      // (the deployed app itself goes through a same-origin Next.js Route
+      // Handler proxy, so it never hits CORS). CDK's addCorsPreflight()
+      // hardcodes apiKeyRequired: false on the generated OPTIONS method
+      // regardless of defaultMethodOptions above — no extra config needed
+      // for that. Cors.DEFAULT_HEADERS already includes Content-Type and
+      // X-Api-Key.
+      defaultCorsPreflightOptions: {
+        allowOrigins: apigateway.Cors.ALL_ORIGINS,
+        allowMethods: apigateway.Cors.ALL_METHODS,
+      },
     });
 
     const key = api.addApiKey('DemoKey');

@@ -16,7 +16,8 @@ slip-box/
 ├── app/
 │   ├── MyAgent/         # Strands agent code — main.py is the entrypoint
 │   ├── api/             # FastAPI backend — Lambda + API Gateway (agentcore/cdk/lib/api-stack.ts)
-│   └── expo/            # Mobile app — share-sheet capture (see app/expo/README.md)
+│   ├── expo/            # Mobile app — share-sheet capture (see app/expo/README.md)
+│   └── web/             # Next.js web app — graph view (see app/web/README.md)
 ├── docs/                # Design docs, build log, diagrams
 │   └── diagrams/        # Generated architecture diagram(s)
 ├── scripts/             # Standalone utility scripts (backfill, diagram generation)
@@ -132,10 +133,15 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 ### Frontend
 
 - **FastAPI** — backend API between Next.js and AWS, deployed as two Lambda functions behind API Gateway (`agentcore/cdk/lib/api-stack.ts`, `app/api/`). `POST /ingest` is asynchronous — an `ApiFunction` validates input and hands off to a `WorkerFunction` that calls `invoke_agent_runtime` (sidesteps API Gateway's ~29s Lambda-proxy timeout, which a synchronous multi-tool-call ingest can exceed); the frontend polls `GET /items` for the result. `GET /items`, `GET /graph`, and `PATCH`/`DELETE /edges/{from_id}/{edge_id}` (composite path — the edges table's key is PK `from_id` + SK `edge_id`, no GSI for point-addressing by `edge_id` alone) read/write DynamoDB directly, no agent involved. Auth via API Gateway's native API Key + Usage Plan (single shared key — real per-user auth arrives with multi-user support, see `docs/future-scope.md`).
-- **Next.js / TypeScript** — two MVP screens: Ingest, Graph view (with inline edge editing — no separate pending-review queue, since edges are auto-written above threshold, see Confidence and edge correction below)
-- Graph visualization: react-force-graph or Cytoscape.js
+- **Next.js / TypeScript** (`app/web/`, App Router) — graph view built; Ingest screen not built (mobile's share-sheet already covers capture, see the Mobile section below). Inline edge editing — no separate pending-review queue, since edges are auto-written above threshold, see Confidence and edge correction below.
+- Graph visualization: `react-force-graph-2d` (the 2D-only sub-package — the combined `react-force-graph` package pulls in three.js/WebGL for 3D/VR support this project doesn't need). Node color by type, edge color by type, edge dashing below a review-worthy confidence cutoff (separate constant from `EDGE_CONFIDENCE_THRESHOLD`, which gates writes, not rendering).
+- Auth: Next.js Route Handlers as a backend-for-frontend proxy (`app/web/lib/backend.ts`) hold the API key server-side — unlike the mobile app's on-device `expo-secure-store`, a web JS bundle is inherently public, so the key never reaches the browser. The deployed app therefore never hits CORS either (same-origin); CORS is still enabled on the API Gateway (`defaultCorsPreflightOptions` in `api-stack.ts`) for local dev iteration against the live API directly.
 - Timeline mode (stretch): same graph data, laid out by `created_at` instead of force-directed, for viewing a MOC's linked notes or a note's neighborhood in chronological/insertion order
-- Hosting: AWS Amplify
+- Hosting: AWS Amplify (Gen 2 — officially supports Next.js App Router; not yet connected, see `app/web/README.md`)
+
+### Mobile
+
+- **Expo / React Native** (`app/expo/`) — share-sheet capture (`expo-share-intent`, one config plugin for both iOS and Android) plus a lightweight recent-notes browse view. Same backend as the web app; API key stored on-device via `expo-secure-store` rather than a server-side proxy, since there's no server tier in a mobile app to hold it. See `app/expo/README.md`.
 
 ### Key Strands tools
 
