@@ -38,6 +38,13 @@ type LinkExtra = Omit<GraphEdge, 'source' | 'target'>;
 
 type GraphViewData = GraphData<GraphNode, LinkExtra>;
 
+// link.source/target may still be a bare string ID on first render, or an
+// already-resolved NodeObject once the simulation has run — same ambiguity
+// handled in onLinkClick below.
+function endpointLabel(end: string | number | NodeObject<GraphNode>): string {
+  return typeof end === 'object' ? (end.label ?? String(end.id)) : String(end);
+}
+
 export default function GraphView() {
   const [data, setData] = useState<GraphViewData>({ nodes: [], links: [] });
   const [loading, setLoading] = useState(true);
@@ -79,6 +86,9 @@ export default function GraphView() {
         linkLineDash={(l: LinkObject<GraphNode, LinkExtra>) =>
           l.confidence < REVIEW_CONFIDENCE_CUTOFF ? [4, 2] : null
         }
+        linkLabel={(l: LinkObject<GraphNode, LinkExtra>) =>
+          `${endpointLabel(l.source!)} → ${endpointLabel(l.target!)} (${l.type}, ${l.confidence.toFixed(2)})`
+        }
         linkDirectionalArrowLength={4}
         linkDirectionalArrowRelPos={1}
         onNodeClick={(n: NodeObject<GraphNode>) => {
@@ -108,6 +118,10 @@ export default function GraphView() {
           onChanged={() => {
             setSelectedEdge(null);
             load();
+          }}
+          onSelectNote={(noteId) => {
+            setSelectedEdge(null);
+            setSelectedNodeId(noteId);
           }}
         />
       )}
