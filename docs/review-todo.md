@@ -346,6 +346,42 @@ verify against a real hand-edit and a real delete. Stage 2 (the
 `WorkerFunction` call, the body-diff gate, the delete-neighbor review) is
 a separate follow-on pass once Stage 1 is live and verified.
 
+**Follow-on hardening, after Stage 1 is live: a staging bucket for `aws s3
+sync`, not a guardrail bolted onto Stage 1 itself.** Stage 1's fail-soft
+handling (log + skip on unparseable frontmatter) leaves real gaps once a
+human is syncing a whole local vault rather than editing one file by hand:
+a skip is silent — nothing tells the user a note didn't make it in, it
+just looks like the sync did nothing; `_parse_frontmatter` is duck-typed
+on structure, not a real YAML validator, so structurally-plausible-but-
+wrong frontmatter (a typo'd field, a list where a scalar belongs) parses
+"successfully" into garbage rather than failing at all; and nothing
+detects two files claiming the same `note_id` (a copy-pasted note whose id
+never got changed) — Stage 1 would just silently overwrite the original's
+DynamoDB row.
+
+Rather than adding bespoke defensive logic to Stage 1 for each of these,
+gatekeep before anything reaches it: sync targets a new **staging**
+bucket, not `slip-box-notes` directly, and a promotion Lambda validates
+(parses frontmatter for real, checks the staged `note_id` against what's
+already live) before copying a file into `slip-box-notes` — which then
+triggers Stage 1 normally. Bad or colliding files never reach the trusted
+bucket, DynamoDB, or the KB at all, rather than being written and only
+discovered as garbage afterward.
+
+**Must be a separate bucket, not a staging prefix within `slip-box-notes`**
+— same reason `slip-box-uploads` is a separate bucket for PDFs, not a
+prefix: `slip-box-notes` is the Bedrock KB's entire data source, unscoped
+by prefix, so anything landing under it (a `_staging/` prefix included)
+gets auto-embedded by the KB directly regardless of validation state.
+Mirrors `slip-box-uploads`'s existing shape otherwise: transient,
+`DESTROY` + short lifecycle expiry, no direct KB exposure.
+
+**Not urgent for the first build** — this is protection against typos and
+interrupted syncs for a solo user syncing their own vault, not a security
+boundary against untrusted third parties (unlike Guardrails, which *is*
+that). Worth building once `#9`'s Stage 1 is live and `aws s3 sync` is
+actually in regular use, not before.
+
 ## 10. Bidirectional Obsidian/S3 sync — open question, not scoped yet
 
 `future-scope.md` currently only covers one-way `aws s3 sync` down to a local
