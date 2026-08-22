@@ -82,6 +82,10 @@ This project was verified live (real AWS calls, real deploys) for a long stretch
 
 **General signal, not just the list above:** if verifying some part of the codebase by hand starts eating real time — repeated live checks for the same class of bug, a deploy-and-curl cycle standing in for what should be a fast local check — that's the point to add a test runner or test type for that area, not to just keep doing the slow check again next time. The list above is today's known cases; it isn't exhaustive, and new categories of slow manual checking should turn into new tests the same way.
 
+**This isn't hypothetical — it's measured.** The Source model change (`app/MyAgent/tests/test_notes.py`) needed ~30–40 minutes of live-verification friction that the 23 tests written after the fact now cover in under a second: false alarms mistaken for bugs (agent judgment calls investigated via live logs when the question was really "is `_normalize_source_key` correct"), a full live round trip to prove dedup behavior a `moto` test proves instantly, and cleanup of dangling test data that only existed because verification meant creating real notes rather than asserting against a mock.
+
+**Before starting a change like this, not after:** think about what verification the change will actually need once it's built, and whether writing that as a test *first* — before or alongside the implementation, not as a retrospective afterthought — would replace a chunk of live round trips with fast local ones. If the answer is yes, write the test first.
+
 ## Agent Code
 
 `app/MyAgent/main.py` is the Strands agent wrapped in `BedrockAgentCoreApp` for AgentCore Runtime hosting:
