@@ -20,7 +20,8 @@
         { "name": "S3_BUCKET", "value": "slip-box-notes" },
         { "name": "KB_ID", "value": "EHSL8ZENQX" },
         { "name": "ITEMS_TABLE", "value": "slip-box-items" },
-        { "name": "EDGES_TABLE", "value": "slip-box-edges" }
+        { "name": "EDGES_TABLE", "value": "slip-box-edges" },
+        { "name": "SOURCES_TABLE", "value": "slip-box-sources" }
       ],
       "additionalPolicies": [
         "policies/agent-permissions.json"

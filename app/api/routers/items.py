@@ -4,7 +4,7 @@ import json
 from boto3.dynamodb.conditions import Attr, Key
 from fastapi import APIRouter, HTTPException, Query
 
-from clients import S3_BUCKET, items_table, s3
+from clients import S3_BUCKET, items_table, s3, sources_table
 from linkgen import parse_frontmatter
 from models import ItemType
 from serialize import clean
@@ -58,7 +58,22 @@ def get_item(note_id: str):
     link_fields = ("supports", "contradicts", "extends", "related_to", "grounded_in")
     connections = {field: frontmatter.get(field, []) for field in link_fields if field in frontmatter}
 
+    item.pop("gsi_pk", None)
+    source = None
+    source_id = item.pop("source_id", None)
+    if source_id:
+        source_item = sources_table.get_item(Key={"source_id": source_id}).get("Item")
+        if source_item:
+            source = clean({
+                "source_id": source_id,
+                "title": source_item.get("title"),
+                "url": source_item.get("url") or None,
+                "type": source_item.get("type"),
+                "author": source_item.get("author") or None,
+            })
+
     result = clean(item)
     result["body"] = body.strip()
     result["connections"] = connections
+    result["source"] = source
     return result

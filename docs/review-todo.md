@@ -41,27 +41,30 @@ can correct inline" UX is now also built: the Next.js graph view
 `EdgePanel` lets the user change the type or delete the edge inline — see
 `docs/build-log.md` Week 3.
 
-## 3. Source references are a flat, unstructured string
+## 3. Source references are a flat, unstructured string — RESOLVED 2026-08-22
 
-`write_note`'s `source_url` param goes straight into frontmatter/DynamoDB as
-a bare string — no author, title, publish date, retrieved date, or pinpoint
-location (page/timestamp). `fetch_url` strips all HTML including the title
-and byline that would be needed to build a real citation, so that metadata
-is discarded at fetch time, not just at write time.
+Fixed: a `slip-box-sources` DynamoDB table holds a real Source record per
+citation (`source_id`, `title`, `author`, `type: web|youtube|pdf`, `url`,
+`retrieved_at`), deduped on write via a `source-key-index` GSI keyed on a
+normalized URL (YouTube URLs collapse to just the video ID, so different
+tracking params on the same video correctly dedupe to one record — a real
+case in this corpus). Notes reference it via `source: [[source-id|Title]]`
+in frontmatter, same wikilink pattern as edges, instead of a raw string.
+`write_note` gained `source_title`/`source_author` params so metadata
+already being fetched (e.g. YouTube's oEmbed title/channel) is preserved
+structurally instead of only folded into note body text. A `source-index`
+GSI on `slip-box-items` answers "everything I've read from X" directly, as
+a query rather than a graph traversal — verified live (a source shared by
+two notes correctly returns both).
 
-`CLAUDE.md` lists `Source` as its own Neptune vertex type, but nothing in
-code creates one — sources aren't graph citizens the way
-`supports`/`contradicts`/`extends`/`related_to` targets are meant to be.
-Consequences:
-- Re-ingesting the same URL creates a second `note_id` with a duplicate raw
-  string — no dedup, no link between notes sharing a source.
-- Can't answer "everything I've read from X" as a graph query.
-- No way to pin a specific claim to a specific location in a long PDF/video.
+Backfilled all 46 pre-existing items with a `source_url`: 46 items deduped
+down to 6 real Source records. See `docs/build-log.md` for the full
+implementation notes and the plan file it was built from.
 
-**Fix:** resolve/create a canonical `source_id` on write (normalize URL for
-dedup), capture structured metadata once, and reference it from the note as
-`source: [[source-id]]` instead of a raw string — same pattern as the other
-typed links.
+Explicitly deferred, not part of this fix: Source as a graph-visible node
+type (`/graph` showing Source nodes, a `RESEARCHED_VIA` edge) and PDF
+ingestion itself — both build on this schema (`type: "pdf"`, a content-hash
+`source_key` instead of a normalized URL) once picked up.
 
 ## 4. `related_to`/`grounded_in` aren't wikilinks
 
@@ -346,11 +349,12 @@ for local-sync specifically.
 
 ---
 
-*Recommended order: #1 unblocks #2 and is the app's core value prop. #3 and
-#6 should land before #7 — the research agent is the workload that will
-hammer flat-string sourcing hardest (N duplicate unstructured `source_url`
-strings per run, no dedup) and is the first caller that actually needs
-PDF/YouTube-aware fetching. #4–#5 are independent metadata/provenance
+*Recommended order: #1 unblocks #2 and is the app's core value prop. #3
+(structured Source records, resolved 2026-08-22) and #6 (YouTube half
+resolved same day) should land before #7 — the research agent is the
+workload that will hammer sourcing hardest, and is the first caller that
+actually needs PDF-aware fetching (the one remaining piece of #6) and
+real dedup (now built, via #3). #4–#5 are independent metadata/provenance
 polish. #8 is a structural decision worth settling before #1 and #7 are
 built, since it determines whether classification/research land as
 in-process Agent-as-Tool calls or standalone AgentCore agents. #9 should

@@ -1,6 +1,6 @@
 import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
@@ -82,10 +82,21 @@ export default function NoteDetailScreen() {
 
           <ThemedText style={styles.body}>{item.body}</ThemedText>
 
-          {!!item.source_url && (
-            <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-              Source: {item.source_url}
-            </ThemedText>
+          {!!item.source && (
+            <Pressable
+              disabled={!item.source.url}
+              onPress={() => item.source!.url && Linking.openURL(item.source!.url)}
+            >
+              <ThemedText
+                type="small"
+                themeColor="textSecondary"
+                numberOfLines={1}
+                style={item.source.url ? styles.sourceLink : undefined}
+              >
+                Source: {item.source.title}
+                {item.source.author ? ` — ${item.source.author}` : ''}
+              </ThemedText>
+            </Pressable>
           )}
 
           {connectionEntries.length > 0 && (
@@ -133,6 +144,9 @@ const styles = StyleSheet.create({
   },
   body: {
     lineHeight: 24,
+  },
+  sourceLink: {
+    textDecorationLine: 'underline',
   },
   connections: {
     gap: Spacing.two,

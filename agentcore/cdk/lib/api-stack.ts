@@ -69,6 +69,7 @@ export class ApiStack extends Stack {
         S3_BUCKET: 'slip-box-notes',
         ITEMS_TABLE: 'slip-box-items',
         EDGES_TABLE: 'slip-box-edges',
+        SOURCES_TABLE: 'slip-box-sources',
         AGENT_RUNTIME_ARN: agentRuntimeArn,
         WORKER_FUNCTION_NAME: workerFn.functionName,
       },
@@ -82,6 +83,17 @@ export class ApiStack extends Stack {
         resources: [
           'arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-items',
           'arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-items/index/recent-index',
+          'arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-items/index/source-index',
+        ],
+      })
+    );
+    apiFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'SourcesRead',
+        actions: ['dynamodb:GetItem', 'dynamodb:Query'],
+        resources: [
+          'arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-sources',
+          'arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-sources/index/source-key-index',
         ],
       })
     );

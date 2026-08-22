@@ -25,13 +25,21 @@ export type GraphResponse = {
   edges: GraphEdge[];
 };
 
+export type Source = {
+  source_id: string;
+  title: string;
+  url: string | null;
+  type: 'web' | 'youtube' | 'pdf';
+  author: string | null;
+};
+
 // Mirrors app/api/routers/items.py's GET /items/{note_id} response shape.
 export type ItemDetail = {
   note_id: string;
   type: ItemType;
   title: string;
   authored_by?: string;
-  source_url?: string;
+  source: Source | null;
   date?: string;
   tags?: string[];
   created_at?: string;

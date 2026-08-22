@@ -43,12 +43,17 @@ export default function NoteCard({
         {item.body}
       </p>
 
-      {item.source_url && !compact && (
+      {item.source && !compact && (
         <p className="mt-3 truncate text-xs text-neutral-500">
           Source:{' '}
-          <a href={item.source_url} target="_blank" rel="noreferrer" className="underline">
-            {item.source_url}
-          </a>
+          {item.source.url ? (
+            <a href={item.source.url} target="_blank" rel="noreferrer" className="underline">
+              {item.source.title}
+            </a>
+          ) : (
+            item.source.title
+          )}
+          {item.source.author && ` — ${item.source.author}`}
         </p>
       )}
     </div>

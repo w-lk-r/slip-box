@@ -14,7 +14,9 @@ def _mode_instruction(req: IngestRequest) -> str:
         if req.topic:
             return (
                 f"Create exactly ONE atomic note from this source, focused specifically on: {req.topic}. "
-                "Ignore other ideas in the source that aren't about this topic."
+                "Ignore other ideas in the source that aren't about this topic. If the source doesn't "
+                "actually cover this topic — not even tangentially — don't force a note about it; say so "
+                "briefly instead and write nothing."
             )
         return (
             "Create exactly ONE atomic note from this source. Pick the single most important or central "

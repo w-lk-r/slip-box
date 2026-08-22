@@ -79,7 +79,6 @@ export type Item = {
   type: ItemType;
   title: string;
   authored_by?: string;
-  source_url?: string;
   date?: string;
   tags?: string[];
   created_at?: string;
@@ -101,7 +100,16 @@ export async function listItems(limit = 20, cursor?: string): Promise<ListItemsR
   return { ok: true, items: result.data.items, cursor: result.data.cursor };
 }
 
+export type Source = {
+  source_id: string;
+  title: string;
+  url: string | null;
+  type: 'web' | 'youtube' | 'pdf';
+  author: string | null;
+};
+
 export type ItemDetail = Item & {
+  source: Source | null;
   body: string;
   connections: Record<string, string[]>;
 };

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Slip Box is a multi-agent "second brain" built with the AWS Strands Agents SDK and hosted on AgentCore Runtime. It ingests sources (articles, YouTube, PDF, plain text), classifies typed relationships between them (SUPPORTS / CONTRADICTS / EXTENDS), and maintains a graph of those connections in Amazon Neptune. All edges are auto-written; confidence score is stored as metadata and surfaced visually in the graph (low-confidence edges render differently) so the user can correct anything they disagree with.
 
-Architecture and design decisions live in this file (below) and in [`docs/build-log.md`](docs/build-log.md) (chronological). The original hackathon pitch/submission strategy is in [`docs/hackathon-pitch.md`](docs/hackathon-pitch.md). AgentCore config and CLI reference is in [`AGENTS.md`](AGENTS.md).
+Architecture and design decisions live in this file (below) and in [`docs/build-log.md`](docs/build-log.md) (chronological). The original hackathon pitch/submission strategy is in [`docs/hackathon-pitch.md`](docs/hackathon-pitch.md). AgentCore config and CLI reference is in [`AGENTS.md`](AGENTS.md). Adding a new DynamoDB table or GSI has a real checklist — see [`docs/schema-change-checklist.md`](docs/schema-change-checklist.md) before starting one.
 
 ## Project Structure
 
@@ -62,6 +62,22 @@ agentcore add <resource>
 Run agentcore commands from the repo root. The agentcore CLI reads `agentcore/agentcore.json` for config.
 
 `npm run deploy:app` compiles TypeScript then deploys the `SlipBox-App-*` stack. npm scripts automatically resolve `cdk` from `node_modules/.bin`, so no global CDK install is needed.
+
+## Testing
+
+This project was verified live (real AWS calls, real deploys) for a long stretch before any automated tests existed — fine for early exploratory work, but it got genuinely expensive building the structured Source model (see `docs/build-log.md`, `docs/schema-change-checklist.md`): real bugs that a millisecond-scale local test would have caught instantly instead cost a multi-minute deploy-and-verify cycle each time.
+
+**Write a test before, not instead of, live verification when:**
+- Changing a pure-ish helper in `app/MyAgent/tools/notes.py` or `app/api/linkgen.py` — frontmatter parsing/rendering, source-key normalization, slugify, dedup logic. No AWS dependency, runs in milliseconds, and this exact class of function is where this project's real bugs have actually lived.
+- Adding or changing DynamoDB read/write logic in a new shape — a new GSI query, a new dedup/lookup pattern. Use `moto` to mock DynamoDB in-process rather than a real table as the first pass; real-AWS verification still happens after, as integration confidence, not as first-pass debugging.
+- Changing a FastAPI route's request/response shape (`app/api/models.py`, `app/api/routers/`) — FastAPI's own `TestClient` catches validator/serialization bugs with no real Lambda or API Gateway involved.
+
+**Not worth it for:**
+- The agent's own LLM reasoning/tool-calling judgment (system prompt changes, "should this note get written") — inherently a live-verification thing.
+- One-off migration/backfill scripts — they run once against real data by design. What actually de-risks them is that the module functions they call are already tested, not testing the throwaway script itself.
+- Frontend UI/visual behavior — `tsc`/`next build` already catch type errors; visual behavior stays a live (`claude-in-chrome`) check.
+
+**General signal, not just the list above:** if verifying some part of the codebase by hand starts eating real time — repeated live checks for the same class of bug, a deploy-and-curl cycle standing in for what should be a fast local check — that's the point to add a test runner or test type for that area, not to just keep doing the slow check again next time. The list above is today's known cases; it isn't exhaustive, and new categories of slow manual checking should turn into new tests the same way.
 
 ## Agent Code
 
@@ -122,8 +138,8 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
   - The `.md.metadata.json` sidecar is a **Bedrock KB requirement**, not an application choice — the KB reads it during S3 sync to treat those fields (type, source, date, tags) as filterable metadata rather than embedding them as content. Without it, frontmatter bleeds into the embedding and degrades retrieval. The KB cannot read DynamoDB; the sidecar cannot be eliminated.
   - Keep the sidecar minimal: only the fields the KB needs for filtering. Full metadata lives in DynamoDB.
   - Use hierarchical/semantic chunking (not default fixed-size) for longer literature notes so retrieval doesn't cut mid-section.
-- **DynamoDB** — `items` table (structured metadata for all note types: `literature-note`, `permanent-note`; `recent-index` GSI — constant `gsi_pk`, sort key `created_at` — so the Recent list can `Query` newest-first instead of an unordered `Scan`) and `edges` table (`from_id`, `to_id`, `type`, `confidence`, `history`; `to_id-index` GSI for reverse lookups). Neptune is the production graph target but DynamoDB covers all MVP query needs (write edge, read edges by node, read all edges for graph render) without VPC complexity.
-- **Amazon Neptune** — graph DB for typed edges. Vertex types: `Item`, `Concept`, `PermanentNote`, `SummaryCard` (see Note taxonomy below), `Source`. Every vertex carries `created_at`/`updated_at` — powers the timeline/MOC view (see Frontend below). Edge types: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`
+- **DynamoDB** — `items` table (structured metadata for all note types: `literature-note`, `permanent-note`; `recent-index` GSI — constant `gsi_pk`, sort key `created_at` — so the Recent list can `Query` newest-first instead of an unordered `Scan`; `source-index` GSI, keyed on `source_id`, answers "every note from this source"), `edges` table (`from_id`, `to_id`, `type`, `confidence`, `history`; `to_id-index` GSI for reverse lookups), and `sources` table (`source_id`, `source_key`, `title`, `author`, `type: web|youtube|pdf`, `url`, `retrieved_at`; `source-key-index` GSI on `source_key` — a normalized URL, or a content hash once PDF ingestion lands — for write-time dedup, so the same source cited by multiple notes resolves to one shared record). Notes reference their source via `source: [[source-id|Title]]` in frontmatter, same wikilink pattern as edges. Neptune is the production graph target but DynamoDB covers all MVP query needs without VPC complexity.
+- **Amazon Neptune** — graph DB for typed edges. Vertex types: `Item`, `Concept`, `PermanentNote`, `SummaryCard` (see Note taxonomy below), `Source`. Every vertex carries `created_at`/`updated_at` — powers the timeline/MOC view (see Frontend below). Edge types: `MENTIONS`, `SUPPORTS`, `CONTRADICTS`, `EXTENDS`, `RELATED_TO`, `RESEARCHED_VIA`, `DISTILLED_INTO`, `GROUNDED_IN`. `Source` and `RESEARCHED_VIA` are implemented today in DynamoDB (above) but not yet as graph-visible Neptune vertices/edges — that's deferred until Neptune itself is wired up.
 
 ### Hosting
 

@@ -24,6 +24,7 @@ S3_BUCKET = os.environ["S3_BUCKET"]
 KB_ID = os.environ["KB_ID"]
 ITEMS_TABLE = os.environ["ITEMS_TABLE"]
 EDGES_TABLE = os.environ["EDGES_TABLE"]
+SOURCES_TABLE = os.environ["SOURCES_TABLE"]
 REGION = os.environ.get("AWS_REGION", os.environ.get("REGION", "ap-southeast-2"))
 
 s3 = boto3.client("s3", region_name=REGION)
@@ -46,6 +47,66 @@ def _slugify(title: str) -> str:
     slug = re.sub(r'[^\w\s-]', '', title.lower())
     slug = re.sub(r'[\s_-]+', '-', slug)
     return slug.strip('-')[:60]
+
+
+# Query-string params that vary per share/click but don't change what's being
+# cited — stripped so the same source shared twice (e.g. a YouTube link with
+# a different ?si= tracking value each time, a real case hit this session)
+# dedupes to one Source record instead of a fresh one per share.
+_TRACKING_PARAMS = {"si", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "feature", "fbclid", "gclid", "t"}
+
+
+def _normalize_source_key(url: str) -> str:
+    """
+    Canonical dedup key for a source URL. YouTube collapses to just the video
+    ID — any two shares of "the same video" only ever differ in tracking or
+    timestamp query params, never in a way that changes identity. Everything
+    else gets a general normalization: lowercase host, drop tracking params,
+    sort what's left, strip trailing slash and fragment.
+    """
+    video_id = _youtube_video_id(url)
+    if video_id:
+        return f"youtube:{video_id}"
+
+    parsed = urllib.parse.urlparse(url)
+    kept = sorted((k, v) for k, v in urllib.parse.parse_qsl(parsed.query) if k.lower() not in _TRACKING_PARAMS)
+    path = parsed.path.rstrip("/") or "/"
+    return urllib.parse.urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, "", urllib.parse.urlencode(kept), ""))
+
+
+def _resolve_source(source_url: str, source_title: str = "", source_author: str = "") -> str | None:
+    """
+    Look up or create the Source record a note cites, deduped by
+    _normalize_source_key. Returns None if no source was given at all
+    (matches write_note's existing optional-source behavior).
+    """
+    if not source_url:
+        return None
+
+    source_key = _normalize_source_key(source_url)
+    existing = ddb.Table(SOURCES_TABLE).query(
+        IndexName="source-key-index",
+        KeyConditionExpression=Key("source_key").eq(source_key),
+        Limit=1,
+    ).get("Items", [])
+    if existing:
+        return existing[0]["source_id"]
+
+    title = source_title or source_url
+    source_type = "youtube" if _youtube_video_id(source_url) else "web"
+    source_id = f"{_slugify(title)}-{uuid.uuid4().hex[:8]}"
+    now = datetime.datetime.utcnow().isoformat()
+    ddb.Table(SOURCES_TABLE).put_item(Item={
+        "source_id": source_id,
+        "source_key": source_key,
+        "type": source_type,
+        "title": title,
+        "author": source_author,
+        "url": source_url,
+        "retrieved_at": now,
+        "created_at": now,
+    })
+    return source_id
 
 
 def _parse_frontmatter(content: str) -> tuple[dict, str]:
@@ -140,7 +201,7 @@ def _regenerate_note_links(note_id: str) -> None:
 
 
 @tool
-def write_note(title: str, body: str, source_url: str = "", tags: list[str] = []) -> dict:
+def write_note(title: str, body: str, source_url: str = "", source_title: str = "", source_author: str = "", tags: list[str] = []) -> dict:
     """
     Write an atomic literature note to the slip case knowledge base.
 
@@ -151,7 +212,12 @@ def write_note(title: str, body: str, source_url: str = "", tags: list[str] = []
     Args:
         title: Precise, descriptive title for the note — becomes the filename
         body: Note body in clear prose, capturing the idea in relation to its source
-        source_url: URL or citation for the source material
+        source_url: URL of the source material, if any. The same URL always
+            resolves to the same Source record (deduped), so re-ingesting the
+            same source doesn't create a duplicate citation.
+        source_title: Title of the source itself (article headline, video title —
+            distinct from this note's own title), if known
+        source_author: Author, channel, or publisher of the source, if known
         tags: Concept tags for the note
 
     Returns:
@@ -161,13 +227,16 @@ def write_note(title: str, body: str, source_url: str = "", tags: list[str] = []
     s3_key = f"{note_id}.md"
     today = datetime.date.today().isoformat()
 
+    source_id = _resolve_source(source_url, source_title, source_author)
+    source_field = f"[[{source_id}|{source_title or source_url}]]" if source_id else ""
+
     tag_lines = "\n".join(f"  - {t}" for t in tags) if tags else "  []"
     md_content = f"""---
 title: {title}
 note_id: {note_id}
 type: literature-note
 authored_by: model
-source: {source_url}
+source: {source_field}
 date: {today}
 tags:
 {tag_lines}
@@ -180,12 +249,15 @@ related_to: []
 {body}
 """
 
-    # Sidecar keeps frontmatter out of KB embeddings — only body gets indexed
+    # Sidecar keeps frontmatter out of KB embeddings — only body gets indexed.
+    # Clean scalar values here, not the [[wikilink]] above — Bedrock KB
+    # metadata filtering wants a real filterable value, not wikilink syntax.
     metadata = {
         "note_id": note_id,
         "type": "literature-note",
         "authored_by": "model",
-        "source": source_url,
+        "source_url": source_url,
+        "source_title": source_title,
         "date": today,
         "tags": ", ".join(tags),
     }
@@ -193,18 +265,22 @@ related_to: []
     s3.put_object(Bucket=S3_BUCKET, Key=s3_key, Body=md_content.encode(), ContentType="text/markdown")
     s3.put_object(Bucket=S3_BUCKET, Key=f"{s3_key}.metadata.json", Body=json.dumps(metadata).encode(), ContentType="application/json")
 
-    ddb.Table(ITEMS_TABLE).put_item(Item={
+    item = {
         "note_id": note_id,
         "type": "literature-note",
         "authored_by": "model",
         "title": title,
         "s3_key": s3_key,
-        "source_url": source_url,
         "date": today,
         "tags": tags,
         "created_at": datetime.datetime.utcnow().isoformat(),
         "gsi_pk": "item",  # constant partition key for recent-index — see app-stack.ts
-    })
+    }
+    # Omitted (not empty-string) when there's no source, so sourceless notes
+    # simply don't appear in source-index — a sparse GSI, not a meaningless bucket.
+    if source_id:
+        item["source_id"] = source_id
+    ddb.Table(ITEMS_TABLE).put_item(Item=item)
 
     log.info(f"Written note: {s3_key}")
     return {"note_id": note_id, "s3_key": s3_key, "title": title}

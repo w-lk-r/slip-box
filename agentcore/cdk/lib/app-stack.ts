@@ -44,6 +44,31 @@ export class AppStack extends Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // GSI: source-index — "every note from this source" reverse lookup,
+    // keyed on the source_id each item cites (see SourcesTable below).
+    itemsTable.addGlobalSecondaryIndex({
+      indexName: 'source-index',
+      partitionKey: { name: 'source_id', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Structured source citations — replaces the old flat source_url string.
+    // PK: source_id. GSI: source-key-index for write-time dedup (normalized
+    // URL today; a content-hash for PDF sources once that ships) so the same
+    // source cited by multiple notes resolves to one shared record instead
+    // of a fresh duplicate every time.
+    const sourcesTable = new dynamodb.Table(this, 'SourcesTable', {
+      tableName: 'slip-box-sources',
+      partitionKey: { name: 'source_id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+    });
+
+    sourcesTable.addGlobalSecondaryIndex({
+      indexName: 'source-key-index',
+      partitionKey: { name: 'source_key', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     // Typed edges between notes.
     // PK: from_id  SK: edge_id (uuid — makes each edge individually addressable)
     // GSI: to_id-index for reverse lookups (what points at this note?)

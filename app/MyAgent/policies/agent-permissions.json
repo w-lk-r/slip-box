@@ -48,7 +48,9 @@
       "Resource": [
         "arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-items",
         "arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-edges",
-        "arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-edges/index/to_id-index"
+        "arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-edges/index/to_id-index",
+        "arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-sources",
+        "arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-sources/index/source-key-index"
       ]
     }
   ]

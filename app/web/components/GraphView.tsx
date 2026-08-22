@@ -230,18 +230,21 @@ export default function GraphView() {
           `${endpointLabel(l.source!)} → ${endpointLabel(l.target!)} (${l.type}, ${l.confidence.toFixed(2)})`
         }
         onNodeClick={(n: NodeObject<GraphNode>) => {
+          const id = String(n.id);
+          // Summary cards both toggle their collapsed/expanded cluster state
+          // AND open their own note panel — previously click was consumed
+          // entirely by the toggle, so the card's own synthesis text was
+          // never reachable from the graph at all.
           if (n.type === 'summary-card') {
-            const id = String(n.id);
             setExpandedClusters((prev) => {
               const next = new Set(prev);
               if (next.has(id)) next.delete(id);
               else next.add(id);
               return next;
             });
-            return;
           }
           setSelectedEdge(null);
-          setSelectedNodeId(String(n.id));
+          setSelectedNodeId(id);
         }}
         onLinkClick={(l: LinkObject<GraphNode, LinkExtra>) => {
           setSelectedNodeId(null);
