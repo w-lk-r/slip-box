@@ -14,7 +14,7 @@ Agent-specific guidance for `app/MyAgent/`. Loaded alongside the root `CLAUDE.md
 - `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` on `slip-box-notes`
 - `bedrock-agent-runtime:Retrieve` on `SlipCaseKB`
 - `bedrock-agent:StartIngestionJob`, `bedrock-agent:ListDataSources` on `SlipCaseKB`
-- `dynamodb:PutItem/GetItem/UpdateItem/DeleteItem/Query/Scan` on `slip-box-items`, `slip-box-edges`, and the `to_id-index` GSI
+- `dynamodb:PutItem/GetItem/UpdateItem/DeleteItem/Query/Scan` on `slip-box-items`, `slip-box-edges`, `slip-box-sources`, `slip-box-ingest-sessions`, and their GSIs (`to_id-index`, `source-key-index`)
 
 ## Dependencies
 
@@ -39,3 +39,7 @@ Runtime deps are in `pyproject.toml`. The `.env` file (gitignored) holds local c
 | `fetch_url` | Fetches and strips URL content for ingestion |
 
 Always call `trigger_kb_sync` after one or more `write_note` or `write_summary` calls.
+
+## Hooks
+
+`hooks.py`'s `IngestOutcomeTracker` (Strands `HookProvider`) tracks whether a turn actually created a note, and why not when it didn't — written to `slip-box-ingest-sessions` at `AfterInvocationEvent`, read back via the API's `GET /ingest/{session_id}`. Registered per-session in `main.py`'s `agent_factory()`. Replaces grepping a truncated Worker log line with structured, in-process data.

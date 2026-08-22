@@ -66,8 +66,17 @@ Read-only shareable links to a subgraph — e.g. share the cluster of notes arou
 
 ---
 
-## Real ingest-completion tracking
+## Real ingest-completion tracking — RESOLVED 2026-08-22
+
+Built as designed below, using Strands lifecycle hooks instead of log-scraping to get the structured outcome: a `slip-box-ingest-sessions` DynamoDB table (`session_id`, `status: processing|complete|error`, `notes_created`, `skipped_reason`, `error`, TTL-expired after 7 days), seeded `processing` by `WorkerFunction` before it calls `invoke_agent_runtime`, finalized by the agent's own `IngestOutcomeTracker` hook (`app/MyAgent/hooks.py`, subscribes `AfterToolCallEvent`/`AfterInvocationEvent`) when the turn ends — no log parsing anywhere in the path. Exposed via `GET /ingest/{session_id}` (treats a not-yet-seeded record as `processing`, not 404, since the Worker invocation is async). `app/expo/src/lib/pendingIngestions.ts` polls this instead of guessing on a timer; `share.tsx` surfaces the real outcome (which note(s) got created, or why none did) once polling resolves.
+
+Verified live end-to-end both ways: a note-worthy source correctly flips to `complete` with `notes_created` populated; a deliberately off-topic single-mode request correctly flips to `complete` with `notes_created: []` and the agent's own stated reasoning in `skipped_reason`.
+
+<details>
+<summary>Original design note (for reference)</summary>
 
 The Expo app's "Generating notes…" placeholder (`app/expo/src/lib/pendingIngestions.ts`) is a client-only, timeout-based best guess — `POST /ingest` returns `202 processing` immediately and there's no way to actually know when a session finished, so the placeholder just clears itself after ~90s or whenever a newer item shows up, whichever comes first. Fine for a solo hackathon MVP, but it's a guess, not a fact.
 
 **Real fix:** a small DynamoDB record per session (`session_id`, `status: processing|complete|error`, timestamps) written by the `WorkerFunction` before/after it calls `invoke_agent_runtime`, exposed via a `GET /ingest/{session_id}` endpoint. The client polls that instead of guessing — the placeholder clears exactly when the backend says the turn is done, not on a timer.
+
+</details>

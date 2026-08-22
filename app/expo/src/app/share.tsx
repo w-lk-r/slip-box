@@ -8,7 +8,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { ingest, type IngestMode, type IngestPayload } from '@/lib/api';
+import { getIngestStatus, ingest, type IngestMode, type IngestPayload, type NoteRef } from '@/lib/api';
 import { addPendingIngestion } from '@/lib/pendingIngestions';
 import { toIngestPayload } from '@/lib/shareIntent';
 import { fetchYoutubeContent, isYoutubeUrl, type YoutubeContent } from '@/lib/youtube';
@@ -53,6 +53,32 @@ export default function ShareScreen() {
   const [topic, setTopic] = useState('');
   const [youtubeContent, setYoutubeContent] = useState<YoutubeContent | null>(null);
   const [youtubeLoading, setYoutubeLoading] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<
+    { notesCreated: NoteRef[]; skippedReason: string | null } | { error: string } | null
+  >(null);
+
+  // Poll the real outcome (which notes got created, or why none did) rather
+  // than leaving "Slip Box is processing it now" as the final word — see
+  // docs/future-scope.md's "Real ingest-completion tracking".
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      const result = await getIngestStatus(sessionId);
+      if (cancelled || !result.ok || result.status === 'processing') return;
+      if (result.status === 'error') {
+        setOutcome({ error: result.error ?? 'Something went wrong.' });
+      } else {
+        setOutcome({ notesCreated: result.notesCreated, skippedReason: result.skippedReason });
+      }
+      clearInterval(interval);
+    }, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [sessionId]);
 
   const basePayload = toIngestPayload(shareIntent);
   const shareUrl = basePayload && 'url' in basePayload ? basePayload.url : null;
@@ -84,6 +110,7 @@ export default function ShareScreen() {
     const result = await ingest(payload);
     if (result.ok) {
       addPendingIngestion(result.sessionId);
+      setSessionId(result.sessionId);
       setStatus('sent');
     } else {
       setStatus('error');
@@ -169,9 +196,28 @@ export default function ShareScreen() {
         {status === 'sent' && (
           <>
             <ThemedText type="smallBold">Sent ✓</ThemedText>
-            <ThemedText type="small" style={styles.hint}>
-              Slip Box is processing it now — it'll show up in your items shortly.
-            </ThemedText>
+            {!outcome && (
+              <ThemedText type="small" style={styles.hint}>
+                Slip Box is processing it now — it'll show up in your items shortly.
+              </ThemedText>
+            )}
+            {outcome && 'error' in outcome && (
+              <ThemedText type="small" style={styles.hint}>
+                Something went wrong while processing: {outcome.error}
+              </ThemedText>
+            )}
+            {outcome && 'notesCreated' in outcome && outcome.notesCreated.length > 0 && (
+              <ThemedText type="small" style={styles.hint}>
+                {outcome.notesCreated.length === 1
+                  ? `Created "${outcome.notesCreated[0].title}".`
+                  : `Created ${outcome.notesCreated.length} notes.`}
+              </ThemedText>
+            )}
+            {outcome && 'notesCreated' in outcome && outcome.notesCreated.length === 0 && (
+              <ThemedText type="small" style={styles.hint}>
+                No note created — {outcome.skippedReason || "the agent didn't find anything worth saving here."}
+              </ThemedText>
+            )}
             <ThemedText type="link" onPress={handleDone} style={styles.action}>
               Done
             </ThemedText>

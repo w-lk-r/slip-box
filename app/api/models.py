@@ -42,6 +42,19 @@ class IngestResponse(BaseModel):
     status: Literal["processing"] = "processing"
 
 
+class NoteRef(BaseModel):
+    note_id: str
+    title: str = ""
+
+
+class IngestStatusResponse(BaseModel):
+    session_id: str
+    status: Literal["processing", "complete", "error"]
+    notes_created: list[NoteRef] = []
+    skipped_reason: str | None = None
+    error: str | None = None
+
+
 class EdgePatch(BaseModel):
     type: EdgeType | None = None
     confidence: float | None = Field(None, ge=0, le=1)

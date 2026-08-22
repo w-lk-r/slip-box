@@ -1,57 +1,74 @@
-// Client-only, best-effort "is my share still processing?" tracker. There's
-// no backend session-status endpoint (POST /ingest just returns 202 and
-// forgets), so this is a guess: a placeholder shows for up to PENDING_TTL_MS,
-// clearing sooner if evidence of completion shows up (a newer item exists),
-// or on its own after the timeout regardless. See docs/future-scope.md for
-// the real fix (a backend status endpoint) if this stops being good enough.
+// Tracks in-flight ingestions for the Recent list's spinner row, backed by
+// real GET /ingest/{session_id} polling — see docs/future-scope.md's "Real
+// ingest-completion tracking". Replaces the old client-only timeout guess.
+import { getIngestStatus } from './api';
+
 export type PendingIngestion = { sessionId: string; startedAt: number };
 
-const PENDING_TTL_MS = 90_000;
+const POLL_INTERVAL_MS = 3000;
+// Safety fallback only — stops polling a session forever if the status
+// endpoint itself is unreachable. Real completion is detected by polling,
+// not by this timeout.
+const MAX_PENDING_MS = 120_000;
 
 let pending: PendingIngestion[] = [];
 const listeners = new Set<() => void>();
-let sweepTimer: ReturnType<typeof setInterval> | null = null;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 function notify() {
   for (const listener of listeners) listener();
 }
 
-function prune() {
-  // Array.filter() always returns a new reference, even when nothing gets
-  // removed — reassigning `pending` unconditionally would make every
-  // getPendingIngestionsSnapshot() call return a "changed" snapshot to
-  // useSyncExternalStore even when nothing actually changed, looping
-  // forever. Only reassign (and notify) when something was actually pruned.
-  const now = Date.now();
-  const filtered = pending.filter((p) => now - p.startedAt < PENDING_TTL_MS);
+// Array.filter() always returns a new reference, even when nothing gets
+// removed — reassigning `pending` unconditionally would make every
+// getPendingIngestionsSnapshot() call return a "changed" snapshot to
+// useSyncExternalStore even when nothing actually changed, looping forever.
+// Only reassign (and notify) when something actually changed. See the fix
+// for the "Maximum update depth exceeded" bug this exact pattern caused.
+function remove(sessionId: string) {
+  const filtered = pending.filter((p) => p.sessionId !== sessionId);
   if (filtered.length !== pending.length) {
     pending = filtered;
     notify();
   }
 }
 
-function scheduleSweep() {
-  if (sweepTimer || pending.length === 0) return;
-  sweepTimer = setInterval(() => {
-    prune();
-    if (pending.length === 0 && sweepTimer) {
-      clearInterval(sweepTimer);
-      sweepTimer = null;
-    }
-  }, 5000);
+async function pollOnce() {
+  const now = Date.now();
+  await Promise.all(
+    pending.map(async (p) => {
+      if (now - p.startedAt > MAX_PENDING_MS) {
+        remove(p.sessionId);
+        return;
+      }
+      const result = await getIngestStatus(p.sessionId);
+      if (result.ok && result.status !== 'processing') {
+        remove(p.sessionId);
+      }
+    })
+  );
+  if (pending.length === 0 && pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function schedulePoll() {
+  if (pollTimer || pending.length === 0) return;
+  pollTimer = setInterval(pollOnce, POLL_INTERVAL_MS);
 }
 
 export function addPendingIngestion(sessionId: string): void {
   pending = [...pending, { sessionId, startedAt: Date.now() }];
   notify();
-  scheduleSweep();
+  schedulePoll();
 }
 
 // Call after a fresh items fetch — clears any pending entry started before
 // the newest known item, since ingestion for it has clearly already landed.
 // Not exact (one share can produce many notes, or none the agent judges
-// worth writing), just a way to clear the placeholder sooner than the
-// timeout in the common case.
+// worth writing), just a way to clear the placeholder sooner than the next
+// poll tick in the common case.
 export function clearPendingBefore(newestItemCreatedAt: string | undefined): void {
   if (!newestItemCreatedAt) return;
   const newestMs = Date.parse(newestItemCreatedAt);
@@ -64,7 +81,6 @@ export function clearPendingBefore(newestItemCreatedAt: string | undefined): voi
 }
 
 export function getPendingIngestionsSnapshot(): PendingIngestion[] {
-  prune();
   return pending;
 }
 

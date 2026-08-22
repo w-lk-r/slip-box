@@ -109,6 +109,8 @@ mangled rather than routed to a proper extractor.
 
 ## 7. Research agent (`--research` fan-out) doesn't exist yet — design notes for when it's built
 
+**Concrete SDK answer confirmed 2026-08-22** (see `.claude/skills/strands-agents-sdk/SKILL.md`): Strands' `Graph`/`GraphBuilder` (`strands/multiagent/graph.py`) gives deterministic DAG execution with built-in budget controls — `set_max_node_executions`, `set_execution_timeout`, `set_node_timeout` — covering the "max search queries," "max sources fetched," and total-time caps sketched by hand below as a `ResearchBudget` object. Build against the real primitive instead of hand-rolling one.
+
 `CLAUDE.md` describes a `--research` path that fans out to a research agent
 before classification, but there's no research agent, no outward
 search/fetch tools beyond the ingestion `fetch_url`, and no budget
@@ -155,6 +157,8 @@ in `CLAUDE.md` (`Item → Source`) to keep "the user gave me this" distinct
 from "I went and found this."
 
 ## 8. Multi-agent split shouldn't be a routing supervisor — dispatch by endpoint instead
+
+**Concrete SDK answer confirmed 2026-08-22** (see `.claude/skills/strands-agents-sdk/SKILL.md`): `Agent.as_tool(name=..., preserve_context=False)` (`strands/agent/_agent_as_tool.py`) wraps a classification `Agent` as a first-class tool the ingestion agent can call — `preserve_context=False` resets the wrapped agent's state per call, matching "score what I just found" with no cross-call bleed, and it's also callable standalone for the on-demand "what else is this connected to?" case. Fits the split described below directly; no custom wrapper needed.
 
 `CLAUDE.md`'s four-agent table (Ingestion / Classification / Research /
 SWOT) implies something needs to decide which agent handles a request. It
@@ -367,6 +371,14 @@ agent path is a live prompt-injection surface the moment `/ingest` is
 public. #12 is downstream of both #9 (extends its Lambda) and the FastAPI
 backend (reuses its worker) — don't start it before either exists, and it
 has no urgency until something writes new notes to S3 outside the agent.*
+
+## 13. Agent session-caching machinery is currently inert — needs a decision, not urgent
+
+Found during a 2026-08-22 QA pass of the codebase against the new `strands-agents-sdk`/`bedrock-agentcore` skills. `main.py`'s `agent_factory()` hand-rolls a 128-slot LRU cache keyed by `session_id`, and `Agent(...)` is constructed with `conversation_manager=NullConversationManager()` — both only matter if a `session_id` gets reused across calls. It never does: `app/api/routers/ingest.py` mints a fresh `uuid.uuid4()`-based `session_id` on every single `/ingest` request, and `worker.py` passes it straight through unchanged. Confirmed via grep that nothing in the API code ever sends the `messages`/`tool_results` payload shapes `main.py`'s `_extract_prompt` supports either — only `prompt`.
+
+In today's actual usage: every request is a cache miss (the cache just holds one-shot entries until evicted or cold-started away), there's no accumulated multi-turn history for `NullConversationManager` to (not) manage, and `_extract_prompt`'s support for other payload shapes is dead code.
+
+Not a bug — nothing behaves incorrectly — but it means this layer was built for a multi-turn conversation pattern the app doesn't currently exercise. **Needs a decision:** (a) keep as intentional future-proofing for eventual multi-turn ingest conversations (`_extract_prompt`'s existing shape-handling suggests that was the original intent), or (b) simplify now — drop the LRU cache since it does nothing today. Same applies to `S3SessionManager` from the `strands-agents-sdk` skill: it would be no more useful than the current setup for the same underlying reason (no session reuse), so it's not an obvious upgrade path either — only worth adopting once (a) is chosen and cold-start session loss actually matters.
 
 ---
 

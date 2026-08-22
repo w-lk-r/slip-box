@@ -40,6 +40,7 @@ export class ApiStack extends Stack {
       memorySize: 512,
       environment: {
         AGENT_RUNTIME_ARN: agentRuntimeArn,
+        INGEST_SESSIONS_TABLE: 'slip-box-ingest-sessions',
       },
     });
     workerFn.addToRolePolicy(
@@ -52,6 +53,16 @@ export class ApiStack extends Stack {
         // it looks right at a glance. Same pattern as an S3 bucket vs. its
         // objects.
         resources: [agentRuntimeArn, `${agentRuntimeArn}/*`],
+      })
+    );
+    workerFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'IngestSessionsWrite',
+        // Only seeds the initial "processing" record and the error-path
+        // update — the agent's own hook (app/MyAgent/hooks.py) writes the
+        // final complete/skipped-reason status via its own IAM role.
+        actions: ['dynamodb:PutItem', 'dynamodb:UpdateItem'],
+        resources: ['arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-ingest-sessions'],
       })
     );
 
@@ -70,6 +81,7 @@ export class ApiStack extends Stack {
         ITEMS_TABLE: 'slip-box-items',
         EDGES_TABLE: 'slip-box-edges',
         SOURCES_TABLE: 'slip-box-sources',
+        INGEST_SESSIONS_TABLE: 'slip-box-ingest-sessions',
         AGENT_RUNTIME_ARN: agentRuntimeArn,
         WORKER_FUNCTION_NAME: workerFn.functionName,
       },
@@ -118,6 +130,13 @@ export class ApiStack extends Stack {
         sid: 'NotesFrontmatterRegen',
         actions: ['s3:GetObject', 's3:PutObject'],
         resources: ['arn:aws:s3:::slip-box-notes/*'],
+      })
+    );
+    apiFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'IngestSessionsRead',
+        actions: ['dynamodb:GetItem'],
+        resources: ['arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-ingest-sessions'],
       })
     );
 

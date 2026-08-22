@@ -72,6 +72,38 @@ export async function ingest(payload: IngestPayload): Promise<IngestResult> {
   return { ok: true, sessionId: result.data.session_id };
 }
 
+export type NoteRef = { note_id: string; title: string };
+
+export type IngestStatusResult =
+  | {
+      ok: true;
+      status: 'processing' | 'complete' | 'error';
+      notesCreated: NoteRef[];
+      skippedReason: string | null;
+      error: string | null;
+    }
+  | { ok: false; error: string };
+
+// Real completion status, replacing a client-only timeout guess — see
+// docs/future-scope.md's "Real ingest-completion tracking". Written by the
+// Worker (initial "processing") and the agent's own hook (final outcome).
+export async function getIngestStatus(sessionId: string): Promise<IngestStatusResult> {
+  const result = await apiFetch<{
+    status: 'processing' | 'complete' | 'error';
+    notes_created: NoteRef[];
+    skipped_reason: string | null;
+    error: string | null;
+  }>(`/ingest/${encodeURIComponent(sessionId)}`);
+  if (!result.ok) return result;
+  return {
+    ok: true,
+    status: result.data.status,
+    notesCreated: result.data.notes_created,
+    skippedReason: result.data.skipped_reason,
+    error: result.data.error,
+  };
+}
+
 export type ItemType = 'literature-note' | 'summary-card' | 'permanent-note';
 
 export type Item = {

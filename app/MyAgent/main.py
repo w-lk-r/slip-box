@@ -7,6 +7,7 @@ from strands.agent.conversation_manager.null_conversation_manager import NullCon
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from model.load import load_model
 from config import SESSION_CACHE_SIZE
+from hooks import IngestOutcomeTracker
 from tools.notes import write_note, write_edge, search_notes, trigger_kb_sync, fetch_url, write_summary, update_summary
 
 load_dotenv()
@@ -64,6 +65,7 @@ def agent_factory():
             system_prompt=SYSTEM_PROMPT,
             tools=tools,
             conversation_manager=NullConversationManager(),
+            hooks=[IngestOutcomeTracker(session_id)],
         )
         return cache[session_id]
 

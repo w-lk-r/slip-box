@@ -21,7 +21,8 @@
         { "name": "KB_ID", "value": "EHSL8ZENQX" },
         { "name": "ITEMS_TABLE", "value": "slip-box-items" },
         { "name": "EDGES_TABLE", "value": "slip-box-edges" },
-        { "name": "SOURCES_TABLE", "value": "slip-box-sources" }
+        { "name": "SOURCES_TABLE", "value": "slip-box-sources" },
+        { "name": "INGEST_SESSIONS_TABLE", "value": "slip-box-ingest-sessions" }
       ],
       "additionalPolicies": [
         "policies/agent-permissions.json"

@@ -3,8 +3,8 @@ import uuid
 
 from fastapi import APIRouter, HTTPException
 
-from clients import WORKER_FUNCTION_NAME, lambda_client
-from models import IngestRequest, IngestResponse
+from clients import WORKER_FUNCTION_NAME, ingest_sessions_table, lambda_client
+from models import IngestRequest, IngestResponse, IngestStatusResponse
 
 router = APIRouter()
 
@@ -54,3 +54,20 @@ def ingest(req: IngestRequest):
         Payload=json.dumps(payload).encode(),
     )
     return IngestResponse(session_id=session_id)
+
+
+@router.get("/ingest/{session_id}", response_model=IngestStatusResponse)
+def get_ingest_status(session_id: str):
+    item = ingest_sessions_table.get_item(Key={"session_id": session_id}).get("Item")
+    if item is None:
+        # POST /ingest invokes the Worker asynchronously and returns 202
+        # immediately, so a client can poll before the Worker's own seed
+        # write lands — that's still "processing", not a 404.
+        return IngestStatusResponse(session_id=session_id, status="processing")
+    return IngestStatusResponse(
+        session_id=session_id,
+        status=item["status"],
+        notes_created=item.get("notes_created", []),
+        skipped_reason=item.get("skipped_reason"),
+        error=item.get("error"),
+    )

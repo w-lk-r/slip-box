@@ -84,5 +84,20 @@ export class AppStack extends Stack {
       partitionKey: { name: 'to_id', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
     });
+
+    // Per-ingest-session status (processing/complete/error) — replaces
+    // grepping a 2000-char-truncated Worker log line to find out whether a
+    // turn created a note. Seeded by the Worker before it invokes the agent;
+    // finalized by the agent's own IngestOutcomeTracker hook
+    // (app/MyAgent/hooks.py) via AfterInvocationEvent. Point lookups only, no
+    // GSI. First genuinely ephemeral table in this schema — unlike
+    // items/edges/sources, this is transient status, so it uses DynamoDB's
+    // native TTL instead of a cleanup script.
+    new dynamodb.Table(this, 'IngestSessionsTable', {
+      tableName: 'slip-box-ingest-sessions',
+      partitionKey: { name: 'session_id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: 'ttl',
+    });
   }
 }
