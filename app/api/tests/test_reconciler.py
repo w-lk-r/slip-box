@@ -4,6 +4,7 @@ DynamoDB sync with no agent/model involvement. moto-mocked (S3 + DynamoDB),
 per CLAUDE.md's guidance for a new DynamoDB/S3 read-write shape.
 """
 import datetime
+import json
 
 import boto3
 import pytest
@@ -115,7 +116,10 @@ class TestHandleUpsert:
         item = items_table.get_item(Key={"note_id": "card-abc123"})["Item"]
         assert item.get("grounded_in") == ["some-member-note"]
 
-    def test_reupsert_preserves_created_at(self, env):
+    def test_reupsert_preserves_created_at(self, env, monkeypatch):
+        # Changing the title changes the body text too (_note_md embeds it),
+        # which now triggers a Stage 2 call — mock it out, not the focus here.
+        monkeypatch.setattr(reconciler, "lambda_client", type("_", (), {"invoke": lambda self, **kw: None})())
         reconciler.s3.put_object(Bucket=S3_BUCKET, Key="my-note-abc123.md", Body=_note_md("my-note-abc123").encode())
         reconciler._handle_upsert(S3_BUCKET, "my-note-abc123.md")
         first_created_at = items_table.get_item(Key={"note_id": "my-note-abc123"})["Item"]["created_at"]
@@ -202,6 +206,90 @@ class TestHandleDelete:
 
     def test_no_matching_item_is_a_noop(self, env):
         reconciler._handle_delete(S3_BUCKET, "never-existed.md")  # must not raise
+
+
+class TestStage2Trigger:
+    """
+    Stage 2 (review-todo.md #9) — an optional agent-triggered reclassification
+    pass, layered on top of Stage 1's own unconditional guarantee. These tests
+    cover the *decision* logic only (should reconciler.py fire a trigger, with
+    what prompt) — the agent's own response to that prompt is a live-
+    verification-only thing, per CLAUDE.md's carve-out for LLM judgment.
+    reconciler.lambda_client.invoke is monkeypatched directly, matching
+    test_worker.py's existing pattern for worker.agentcore.invoke_agent_runtime.
+    """
+
+    def test_body_change_on_existing_note_triggers(self, env, monkeypatch):
+        calls = []
+        monkeypatch.setattr(reconciler, "lambda_client", type("_", (), {"invoke": lambda self, **kw: calls.append(kw)})())
+
+        reconciler.s3.put_object(Bucket=S3_BUCKET, Key="edit-note.md", Body=_note_md("edit-note", title="Edit Note").encode())
+        reconciler._handle_upsert(S3_BUCKET, "edit-note.md")
+        assert calls == []  # brand-new note — must not fire
+
+        reconciler.s3.put_object(Bucket=S3_BUCKET, Key="edit-note.md", Body=_note_md("edit-note", title="Edit Note").encode().replace(b"Body text", b"Changed body text"))
+        reconciler._handle_upsert(S3_BUCKET, "edit-note.md")
+
+        assert len(calls) == 1
+        payload = json.loads(calls[0]["Payload"])
+        assert "do NOT call write_note" in payload["prompt"]
+        assert "Edit Note" in payload["prompt"]
+        assert calls[0]["FunctionName"] == "test-worker"
+        assert calls[0]["InvocationType"] == "Event"
+
+    def test_frontmatter_only_change_does_not_trigger(self, env, monkeypatch):
+        calls = []
+        monkeypatch.setattr(reconciler, "lambda_client", type("_", (), {"invoke": lambda self, **kw: calls.append(kw)})())
+
+        reconciler.s3.put_object(Bucket=S3_BUCKET, Key="tags-only.md", Body=_note_md("tags-only").encode())
+        reconciler._handle_upsert(S3_BUCKET, "tags-only.md")
+
+        reconciler.s3.put_object(Bucket=S3_BUCKET, Key="tags-only.md", Body=_note_md("tags-only", tags=["new-tag"]).encode())
+        reconciler._handle_upsert(S3_BUCKET, "tags-only.md")
+
+        assert calls == []
+
+    def test_delete_with_two_neighbors_triggers(self, env, monkeypatch):
+        calls = []
+        monkeypatch.setattr(reconciler, "lambda_client", type("_", (), {"invoke": lambda self, **kw: calls.append(kw)})())
+
+        for nid, title in [("bridge", "Bridge Note"), ("left", "Left Note"), ("right", "Right Note")]:
+            reconciler.s3.put_object(Bucket=S3_BUCKET, Key=f"{nid}.md", Body=_note_md(nid, title=title).encode())
+            reconciler._handle_upsert(S3_BUCKET, f"{nid}.md")
+        edges_table.put_item(Item={"from_id": "left", "edge_id": "e1", "to_id": "bridge", "type": "RELATED_TO", "confidence": 1})
+        edges_table.put_item(Item={"from_id": "bridge", "edge_id": "e2", "to_id": "right", "type": "RELATED_TO", "confidence": 1})
+
+        reconciler._handle_delete(S3_BUCKET, "bridge.md")
+
+        assert len(calls) == 1
+        payload = json.loads(calls[0]["Payload"])
+        assert "Left Note" in payload["prompt"]
+        assert "Right Note" in payload["prompt"]
+
+    def test_delete_with_one_neighbor_does_not_trigger(self, env, monkeypatch):
+        calls = []
+        monkeypatch.setattr(reconciler, "lambda_client", type("_", (), {"invoke": lambda self, **kw: calls.append(kw)})())
+
+        for nid in ("solo-a", "solo-b"):
+            reconciler.s3.put_object(Bucket=S3_BUCKET, Key=f"{nid}.md", Body=_note_md(nid).encode())
+            reconciler._handle_upsert(S3_BUCKET, f"{nid}.md")
+        edges_table.put_item(Item={"from_id": "solo-b", "edge_id": "e1", "to_id": "solo-a", "type": "RELATED_TO", "confidence": 1})
+
+        reconciler._handle_delete(S3_BUCKET, "solo-a.md")
+
+        assert calls == []
+
+    def test_missing_worker_function_name_skips_without_raising(self, env, monkeypatch):
+        monkeypatch.setattr(reconciler, "WORKER_FUNCTION_NAME", "")
+        calls = []
+        monkeypatch.setattr(reconciler, "lambda_client", type("_", (), {"invoke": lambda self, **kw: calls.append(kw)})())
+
+        reconciler.s3.put_object(Bucket=S3_BUCKET, Key="no-worker.md", Body=_note_md("no-worker").encode())
+        reconciler._handle_upsert(S3_BUCKET, "no-worker.md")
+        reconciler.s3.put_object(Bucket=S3_BUCKET, Key="no-worker.md", Body=_note_md("no-worker").encode().replace(b"Body text", b"Changed"))
+        reconciler._handle_upsert(S3_BUCKET, "no-worker.md")  # must not raise
+
+        assert calls == []
 
 
 class TestHandler:

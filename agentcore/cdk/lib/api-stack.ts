@@ -168,10 +168,11 @@ export class ApiStack extends Stack {
       timeout: Duration.seconds(30),
       memorySize: 512,
       environment: {
-        // reconciler.py only reads S3_BUCKET/ITEMS_TABLE/EDGES_TABLE, but it
-        // imports linkgen.py, which imports clients.py, which reads every
-        // one of these unconditionally at module import time — so all of
-        // them have to be set even though this function only uses three.
+        // reconciler.py itself only reads S3_BUCKET/ITEMS_TABLE/EDGES_TABLE/
+        // WORKER_FUNCTION_NAME, but it imports linkgen.py, which imports
+        // clients.py, which reads every one of these unconditionally at
+        // module import time — so the rest have to be set too even though
+        // this function never uses them directly.
         S3_BUCKET: 'slip-box-notes',
         ITEMS_TABLE: 'slip-box-items',
         EDGES_TABLE: 'slip-box-edges',
@@ -179,8 +180,12 @@ export class ApiStack extends Stack {
         INGEST_SESSIONS_TABLE: 'slip-box-ingest-sessions',
         UPLOADS_BUCKET: 'slip-box-uploads-690445895420',
         AGENT_RUNTIME_ARN: agentRuntimeArn,
+        // Stage 2 (review-todo #9) — fires an async reclassification pass
+        // through the same WorkerFunction path POST /ingest already uses.
+        WORKER_FUNCTION_NAME: workerFn.functionName,
       },
     });
+    workerFn.grantInvoke(reconcilerFn);
     reconcilerFn.addToRolePolicy(
       new iam.PolicyStatement({
         sid: 'NotesReadWrite',
@@ -194,7 +199,11 @@ export class ApiStack extends Stack {
     reconcilerFn.addToRolePolicy(
       new iam.PolicyStatement({
         sid: 'ItemsReadWrite',
-        actions: ['dynamodb:PutItem', 'dynamodb:GetItem', 'dynamodb:DeleteItem', 'dynamodb:Scan', 'dynamodb:UpdateItem'],
+        // No PutItem — every write here is a partial update_item (see
+        // reconciler.py's own comment on why: a full put_item would wipe
+        // attributes Stage 1 doesn't manage, like a summary card's
+        // grounded_in, on the self-retrigger regenerate_note_links causes).
+        actions: ['dynamodb:GetItem', 'dynamodb:DeleteItem', 'dynamodb:Scan', 'dynamodb:UpdateItem'],
         resources: ['arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-items'],
       })
     );

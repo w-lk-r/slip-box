@@ -207,7 +207,7 @@ add agent` per route — matches the "four separate Strands agents" framing
 literally, isolates blast radius/scaling/cost per flow, but means N cold
 starts and N deploy surfaces instead of one).
 
-## 9. DynamoDB has no reconciliation path for edits made directly in S3/KB — Stage 1 RESOLVED 2026-08-22, Stage 2 + staging bucket still open
+## 9. DynamoDB has no reconciliation path for edits made directly in S3/KB — Stage 1 + Stage 2 RESOLVED 2026-08-22, staging bucket still open
 
 **Flagged next up 2026-08-22** — reprioritized ahead of #7 (`--research` fan-out) and #8 (classification split). The remaining Lambda half below has been sitting as "not urgent, no trigger yet" since the clobber-bug fix, but every schema-touching feature landed since (Source model, ingest-outcome tracking, PDF ingestion, Guardrails) has widened the surface for DynamoDB/S3 to drift — worth closing this gap while the schema is still relatively simple rather than letting more features stack on top of a known-inconsistent read path.
 
@@ -379,9 +379,44 @@ fix above); a real missing-`note_id` note (hand-written, no frontmatter
 delimiters even) correctly backfilled, rewritten, sidecar generated, and
 reachable via `GET /items/{note_id}`. All test data cleaned up afterward.
 
-**Stage 2** (the `WorkerFunction` call, the body-diff gate, the
-delete-neighbor review) is a separate follow-on pass, not built here — it
-was never a dependency of Stage 1's own correctness, and stays that way.
+**Stage 2 built and live-verified 2026-08-22.** Body-diff gate: a
+`body_hash` (SHA-256 of the parsed body) added to Stage 1's own managed
+fields, compared against the previous value — fires only when a *previous*
+hash existed and differs, which naturally excludes the agent's own fresh
+`write_note` creates (already classified synchronously in that same turn)
+and skips frontmatter-only edits (tags, a typo). Trigger: `reconciler.py`'s
+`_trigger_stage2` invokes `WorkerFunction` exactly as `POST /ingest`
+already does (`InvocationType='Event'`), which means ingest-outcome
+tracking (`slip-box-ingest-sessions`, `GET /ingest/{session_id}`) covers
+Stage 2 sessions for free — zero new code needed there. System prompt
+(`app/MyAgent/main.py`) gained one new paragraph: the existing "explicit
+instruction overrides default judgment" mechanism only covered note
+*count* (single/all/auto), not "create nothing, only search and link," so
+a dedicated `RECLASSIFICATION PASS` directive was added rather than
+stretching that mechanism to cover a case it wasn't built for.
+
+Delete-neighbor review (opt-in, only when ≥2 neighbors): neighbors are
+collected from *both* directions — targets of the deleted note's own
+outgoing edges, and sources of its incoming edges — not automatic
+transitive reattachment (A–B–C still does not imply A–C); the agent
+re-derives any connection on its own merits via `search_notes`, same
+confidence gate as anything else.
+
+Live-verified both trigger paths end-to-end: a real body-changing hand-edit
+correctly fired a Stage 2 session that skipped note creation
+(`notes_created: []`), found a genuine existing corpus note via semantic
+search, and wrote a real `RELATED_TO` edge at confidence 0.78; a
+tags-only edit on the same note correctly did *not* fire a new session; a
+real delete of a note with two real neighbors correctly fired a session
+naming both — the agent correctly declined to force a connection when it
+couldn't verify one (the test notes hadn't been through `trigger_kb_sync`
+yet, so they weren't in the semantic index), which is the intended
+"if and only if needed" behavior, not a bug. Caught one real gap in the
+process: `reconciler.py`'s logger never had its level set, so none of its
+`log.info` calls reached CloudWatch at all (Lambda's default root logger
+level is WARNING) — verification had to read DynamoDB directly instead of
+the logs that were supposed to show it; fixed with `log.setLevel(logging.INFO)`,
+matching the pattern `worker.py` already used.
 
 **Follow-on hardening, after Stage 1 is live: a staging bucket for `aws s3
 sync`, not a guardrail bolted onto Stage 1 itself.** Stage 1's fail-soft
@@ -477,13 +512,12 @@ burn Bedrock spend or spam the KB with junk.
 
 ---
 
-*Recommended order, updated 2026-08-22: #1, #2, #3, #6, #9 (Stage 1), and
-#11 are all resolved; the note-created-entirely-outside-the-system case
-(missing `note_id`/sidecar, no linkages — previously its own item) was
-folded into #9 and shipped with it, not tracked separately anymore. Still
-open under #9: Stage 2 (agent-triggered semantic reconciliation) and the
-`aws s3 sync` staging bucket — both explicit, non-blocking follow-ons, not
-required for the core guarantee #9 exists for. #10 is downstream of #9 —
+*Recommended order, updated 2026-08-22: #1, #2, #3, #6, #9 (Stage 1 + Stage
+2), and #11 are all resolved; the note-created-entirely-outside-the-system
+case (missing `note_id`/sidecar, no linkages — previously its own item)
+was folded into #9 and shipped with it, not tracked separately anymore.
+Still open under #9: the `aws s3 sync` staging bucket — non-blocking
+hardening, not required for the core guarantee. #10 is downstream of #9 —
 don't start it first. #7 (`--research` fan-out) and #8 (classification
 split, a structural decision worth settling before #7) are the two big
 remaining feature items. #4–#5 are independent metadata/provenance polish,
