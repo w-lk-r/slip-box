@@ -1,4 +1,5 @@
-import { Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
+import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
+import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
@@ -122,5 +123,57 @@ export class AppStack extends Stack {
         },
       ],
     });
+
+    // Bedrock Guardrails — the "oob" (out-of-box) categories only: the five
+    // standard harm filters plus PROMPT_ATTACK, the category built
+    // specifically to catch injected instructions riding in through
+    // fetch_url/read_pdf's untrusted third-party content. Denied topics and
+    // PII/sensitive-info filtering are a separate decision, not included
+    // here — see docs/review-todo.md #11.
+    const guardrail = new bedrock.CfnGuardrail(this, 'SlipBoxGuardrail', {
+      name: 'slip-box-guardrail',
+      blockedInputMessaging: 'This request was blocked by content safety filtering.',
+      blockedOutputsMessaging: 'This response was blocked by content safety filtering.',
+      contentPolicyConfig: {
+        filtersConfig: [
+          ...['HATE', 'INSULTS', 'SEXUAL', 'VIOLENCE', 'MISCONDUCT'].map((type) => ({
+            type,
+            inputStrength: 'MEDIUM',
+            outputStrength: 'MEDIUM',
+            inputEnabled: true,
+            outputEnabled: true,
+          })),
+          // Input-only — PROMPT_ATTACK has no output-side equivalent; it
+          // classifies injected-instruction patterns in what reaches the
+          // model, not the model's own generated text.
+          {
+            type: 'PROMPT_ATTACK',
+            inputStrength: 'MEDIUM',
+            outputStrength: 'NONE',
+            inputEnabled: true,
+            outputEnabled: false,
+          },
+        ],
+      },
+    });
+
+    // A stable numbered version, not the mutable DRAFT — the agent pins to
+    // this, not to whatever DRAFT happens to contain at invoke time.
+    // Logical id bumped to V2 after calibration: PROMPT_ATTACK at HIGH
+    // (v1's config) false-positived on this project's own _build_prompt
+    // mode-instruction prefix ("Create exactly ONE atomic note...") followed
+    // by pasted content — structurally identical to an injected-instruction
+    // pattern regardless of what the content actually said, confirmed via
+    // live testing (blocked even plainly benign agricultural text). MEDIUM
+    // still catches a real injection attempt ("SYSTEM OVERRIDE: ignore all
+    // previous instructions...") while letting single/all-mode ingests
+    // through — see docs/build-log.md.
+    const guardrailVersion = new bedrock.CfnGuardrailVersion(this, 'SlipBoxGuardrailVersionV2', {
+      guardrailIdentifier: guardrail.attrGuardrailId,
+    });
+
+    new CfnOutput(this, 'GuardrailIdOutput', { value: guardrail.attrGuardrailId });
+    new CfnOutput(this, 'GuardrailArnOutput', { value: guardrail.attrGuardrailArn });
+    new CfnOutput(this, 'GuardrailVersionOutput', { value: guardrailVersion.attrVersion });
   }
 }

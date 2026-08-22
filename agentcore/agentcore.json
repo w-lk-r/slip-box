@@ -23,7 +23,9 @@
         { "name": "EDGES_TABLE", "value": "slip-box-edges" },
         { "name": "SOURCES_TABLE", "value": "slip-box-sources" },
         { "name": "INGEST_SESSIONS_TABLE", "value": "slip-box-ingest-sessions" },
-        { "name": "UPLOADS_BUCKET", "value": "slip-box-uploads-690445895420" }
+        { "name": "UPLOADS_BUCKET", "value": "slip-box-uploads-690445895420" },
+        { "name": "GUARDRAIL_ID", "value": "fgfcf8541kk6" },
+        { "name": "GUARDRAIL_VERSION", "value": "2" }
       ],
       "additionalPolicies": [
         "policies/agent-permissions.json"

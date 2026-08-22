@@ -18,12 +18,11 @@
                 "dataSourceId": "JOVFFE1UWC",
                 "uri": "s3://slip-box-notes"
               }
-            ],
-            "sourcesHash": "fb093677e6d3164eb79084cf22b11088f54f7315d397fff676e94a1044d5a29e"
+            ]
           }
         },
         "stackName": "AgentCore-SlipBox-default",
-        "deployHash": "7ccd65d22c280584"
+        "deployHash": "6b7fe3f33d1cb970"
       }
     }
   }

@@ -270,11 +270,13 @@ is still open, and is the harder half of the #9 reconciliation problem:
   post-MVP, and only worth building once #9's one-way reconciliation exists
   to build on top of.
 
-## 11. No guardrails between FastAPI input and the agent — RESOLVED 2026-08-21 (first bullet only)
+## 11. No guardrails between FastAPI input and the agent — RESOLVED 2026-08-22 (both bullets)
 
 Deployed and verified against the live stack: pydantic validation (422s confirmed on empty/conflicting `/ingest` bodies) and API Gateway's native API Key + Usage Plan (403 confirmed with no/wrong key, throttle 5rps/10burst + 2000/day quota attached) cover the first bullet below entirely through infra config, no hand-rolled app code. See `docs/build-log.md` Week 3 for the two real IAM/env bugs this deploy surfaced and fixed.
 
-Bedrock Guardrails (second bullet) remains deferred — plug-in point documented as `app/MyAgent/model/load.py`'s `load_model()`. This item stays open until that's built.
+Bedrock Guardrails (second bullet) now built — a `CfnGuardrail` (`agentcore/cdk/lib/app-stack.ts`) with the five standard content-harm filters plus `PROMPT_ATTACK` detection, wired into `app/MyAgent/model/load.py`'s `load_model()` via `BedrockModel`'s native `guardrail_id`/`guardrail_version` params — exactly the plug-in point this item named. Denied topics and PII/sensitive-info filtering deliberately not included (out of scope, need app-specific tuning — a real follow-on, not silently dropped).
+
+**Real false positive caught during live verification, not guessed at**: the first config (`PROMPT_ATTACK` at `HIGH`) blocked every `single`/`all`-mode ingest outright — including plainly benign agricultural text with zero security vocabulary. Root cause: it wasn't content-based at all — `_build_prompt`'s mode-instruction prefix ("Create exactly ONE atomic note from this source...") followed by pasted content is *structurally* identical to an injected-instruction pattern, which is exactly what `PROMPT_ATTACK` is trained to catch, regardless of what the pasted content actually says. `auto` mode (no instruction prefix) was unaffected — that isolated the cause. Lowered to `MEDIUM`, redeployed as a stable published version, re-verified: benign `single`/`all`-mode ingests succeed again, and a deliberate injection attempt ("SYSTEM OVERRIDE: ignore all previous instructions...") still gets blocked. Worth remembering if `_build_prompt`'s prefix pattern changes shape later — re-check this specific interaction, not just "does the guardrail still fire on attacks."
 
 Once `/ingest` exists, arbitrary user-submitted URLs/text/PDFs flow straight
 into the agent's context, and `fetch_url` pulls in third-party web content
