@@ -12,6 +12,10 @@ IngestMode = Literal["auto", "single", "all"]
 class IngestRequest(BaseModel):
     text: str | None = Field(None, max_length=200_000)
     url: HttpUrl | None = None
+    # S3 key of an uploaded PDF, from a prior POST /uploads/presign call
+    # (e.g. "uploads/{upload_id}/{filename}.pdf") — mutually exclusive with
+    # text/url, same as they are with each other.
+    pdf_key: str | None = Field(None, max_length=1024)
     # Only valid alongside text — for a client that already fetched the
     # content itself (e.g. the Expo app pre-fetching a YouTube transcript
     # client-side, since AWS's own IPs are blocked by YouTube's transcript
@@ -27,11 +31,10 @@ class IngestRequest(BaseModel):
     topic: str | None = Field(None, max_length=200)
 
     @model_validator(mode="after")
-    def one_of_text_or_url(self):
-        if not self.text and not self.url:
-            raise ValueError("one of text or url is required")
-        if self.text and self.url:
-            raise ValueError("provide only one of text or url")
+    def exactly_one_source(self):
+        provided = [bool(self.text), self.url is not None, bool(self.pdf_key)]
+        if sum(provided) != 1:
+            raise ValueError("exactly one of text, url, or pdf_key is required")
         if self.source_url and not self.text:
             raise ValueError("source_url is only valid alongside text")
         return self
@@ -53,6 +56,35 @@ class IngestStatusResponse(BaseModel):
     notes_created: list[NoteRef] = []
     skipped_reason: str | None = None
     error: str | None = None
+
+
+# 20MB is a pragmatic guardrail, not a verified Bedrock document-size limit —
+# the Converse API's DocumentSource shape has no documented max in its
+# service model (only a min:1 byte constraint), and the actual ceiling is
+# presumably a runtime/model-side limit rather than a schema one. This just
+# stops an accidental whole-book upload from silently failing deep inside an
+# agent invocation instead of at the point of upload.
+MAX_PDF_SIZE_BYTES = 20 * 1024 * 1024
+
+
+class FileToPresign(BaseModel):
+    filename: str
+    size: int = Field(..., gt=0, le=MAX_PDF_SIZE_BYTES)
+
+
+class PresignRequest(BaseModel):
+    files: list[FileToPresign] = Field(..., min_length=1, max_length=50)
+
+
+class PresignedFile(BaseModel):
+    filename: str
+    key: str
+    upload_url: str
+
+
+class PresignResponse(BaseModel):
+    upload_id: str
+    files: list[PresignedFile]
 
 
 class EdgePatch(BaseModel):

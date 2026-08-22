@@ -1,4 +1,4 @@
-import { RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
+import { Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
@@ -98,6 +98,29 @@ export class AppStack extends Stack {
       partitionKey: { name: 'session_id', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       timeToLiveAttribute: 'ttl',
+    });
+
+    // Raw uploaded PDFs, staged before the agent reads them — deliberately
+    // NOT slip-box-notes: that bucket is the Bedrock KB's entire data source
+    // (unscoped by prefix), so a raw PDF landing there would get auto-embedded
+    // directly, bypassing the agent's classification/frontmatter pipeline
+    // entirely. Transient — the durable artifact is the resulting note, not
+    // the raw PDF — so DESTROY + a short lifecycle expiry, unlike NotesBucket.
+    new s3.Bucket(this, 'UploadsBucket', {
+      bucketName: 'slip-box-uploads-690445895420',
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      removalPolicy: RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+      lifecycleRules: [{ expiration: Duration.days(14) }],
+      // Presigned PUT still needs CORS — SigV4 auth, not public ACLs, but the
+      // browser still enforces CORS on the cross-origin PUT itself.
+      cors: [
+        {
+          allowedMethods: [s3.HttpMethods.PUT],
+          allowedOrigins: ['https://main.d2viclhggmi7s9.amplifyapp.com', 'http://localhost:3000'],
+          allowedHeaders: ['*'],
+        },
+      ],
     });
   }
 }

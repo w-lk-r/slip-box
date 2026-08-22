@@ -15,7 +15,38 @@ from tools.notes import (
     _resolve_source,
     _slugify,
     _youtube_video_id,
+    read_pdf,
 )
+
+
+def _create_sources_table():
+    import boto3
+
+    ddb = boto3.resource("dynamodb", region_name="ap-southeast-2")
+    ddb.create_table(
+        TableName="test-sources",
+        KeySchema=[{"AttributeName": "source_id", "KeyType": "HASH"}],
+        AttributeDefinitions=[
+            {"AttributeName": "source_id", "AttributeType": "S"},
+            {"AttributeName": "source_key", "AttributeType": "S"},
+        ],
+        GlobalSecondaryIndexes=[
+            {
+                "IndexName": "source-key-index",
+                "KeySchema": [{"AttributeName": "source_key", "KeyType": "HASH"}],
+                "Projection": {"ProjectionType": "ALL"},
+            }
+        ],
+        BillingMode="PAY_PER_REQUEST",
+    )
+
+
+def _create_uploads_bucket():
+    import boto3
+
+    boto3.client("s3", region_name="ap-southeast-2").create_bucket(
+        Bucket="test-uploads", CreateBucketConfiguration={"LocationConstraint": "ap-southeast-2"}
+    )
 
 
 class TestSlugify:
@@ -125,31 +156,117 @@ class TestFrontmatterRoundTrip:
 class TestResolveSource:
     @mock_aws
     def test_same_url_dedupes_to_same_source_id(self):
-        import boto3
+        _create_sources_table()
 
-        ddb = boto3.resource("dynamodb", region_name="ap-southeast-2")
-        ddb.create_table(
-            TableName="test-sources",
-            KeySchema=[{"AttributeName": "source_id", "KeyType": "HASH"}],
-            AttributeDefinitions=[
-                {"AttributeName": "source_id", "AttributeType": "S"},
-                {"AttributeName": "source_key", "AttributeType": "S"},
-            ],
-            GlobalSecondaryIndexes=[
-                {
-                    "IndexName": "source-key-index",
-                    "KeySchema": [{"AttributeName": "source_key", "KeyType": "HASH"}],
-                    "Projection": {"ProjectionType": "ALL"},
-                }
-            ],
-            BillingMode="PAY_PER_REQUEST",
-        )
-
-        first = _resolve_source("https://example.com/article", source_title="An Article")
-        second = _resolve_source("https://example.com/article?utm_source=twitter", source_title="An Article")
+        first = _resolve_source(source_url="https://example.com/article", source_title="An Article")
+        second = _resolve_source(source_url="https://example.com/article?utm_source=twitter", source_title="An Article")
 
         assert first == second
 
     @mock_aws
-    def test_no_source_url_returns_none(self):
-        assert _resolve_source("") is None
+    def test_no_source_returns_none(self):
+        assert _resolve_source() is None
+
+    @mock_aws
+    def test_same_pdf_content_dedupes_to_same_source_id(self):
+        # Real bug caught in live verification: keying dedup off the S3 key
+        # itself never dedupes, since every upload gets a fresh upload_id in
+        # its key even for byte-identical content. Must key off the actual
+        # content (via the single-PUT object's ETag, which is its MD5).
+        import boto3
+
+        _create_sources_table()
+        _create_uploads_bucket()
+        s3 = boto3.client("s3", region_name="ap-southeast-2")
+        pdf_bytes = b"%PDF-1.4 identical content"
+        s3.put_object(Bucket="test-uploads", Key="uploads/aaa111/paper.pdf", Body=pdf_bytes)
+        s3.put_object(Bucket="test-uploads", Key="uploads/bbb222/paper-reupload.pdf", Body=pdf_bytes)
+
+        first = _resolve_source(source_pdf_key="uploads/aaa111/paper.pdf")
+        second = _resolve_source(source_pdf_key="uploads/bbb222/paper-reupload.pdf")
+
+        assert first == second
+
+    @mock_aws
+    def test_different_pdf_content_doesnt_match(self):
+        import boto3
+
+        _create_sources_table()
+        _create_uploads_bucket()
+        s3 = boto3.client("s3", region_name="ap-southeast-2")
+        s3.put_object(Bucket="test-uploads", Key="uploads/aaa111/paper-one.pdf", Body=b"content one")
+        s3.put_object(Bucket="test-uploads", Key="uploads/bbb222/paper-two.pdf", Body=b"content two, different")
+
+        first = _resolve_source(source_pdf_key="uploads/aaa111/paper-one.pdf")
+        second = _resolve_source(source_pdf_key="uploads/bbb222/paper-two.pdf")
+
+        assert first != second
+
+    @mock_aws
+    def test_pdf_source_defaults_title_to_filename(self):
+        import boto3
+
+        _create_sources_table()
+        _create_uploads_bucket()
+        s3 = boto3.client("s3", region_name="ap-southeast-2")
+        s3.put_object(Bucket="test-uploads", Key="uploads/abc123/My Paper.pdf", Body=b"content")
+
+        source_id = _resolve_source(source_pdf_key="uploads/abc123/My Paper.pdf")
+
+        item = boto3.resource("dynamodb", region_name="ap-southeast-2").Table("test-sources").get_item(
+            Key={"source_id": source_id}
+        )["Item"]
+        assert item["title"] == "My Paper.pdf"
+        assert item["type"] == "pdf"
+
+    @mock_aws
+    def test_pdf_key_takes_priority_over_url(self):
+        import boto3
+
+        _create_sources_table()
+        _create_uploads_bucket()
+        s3 = boto3.client("s3", region_name="ap-southeast-2")
+        s3.put_object(Bucket="test-uploads", Key="uploads/abc123/paper.pdf", Body=b"content")
+
+        source_id = _resolve_source(source_url="https://example.com/article", source_pdf_key="uploads/abc123/paper.pdf")
+
+        item = boto3.resource("dynamodb", region_name="ap-southeast-2").Table("test-sources").get_item(
+            Key={"source_id": source_id}
+        )["Item"]
+        assert item["type"] == "pdf"
+
+
+class TestReadPdf:
+    @mock_aws
+    def test_reads_pdf_bytes_into_a_document_content_block(self):
+        import boto3
+
+        s3 = boto3.client("s3", region_name="ap-southeast-2")
+        s3.create_bucket(Bucket="test-uploads", CreateBucketConfiguration={"LocationConstraint": "ap-southeast-2"})
+        pdf_bytes = b"%PDF-1.4 fake pdf content for testing"
+        s3.put_object(Bucket="test-uploads", Key="uploads/abc123/paper.pdf", Body=pdf_bytes)
+
+        result = read_pdf("uploads/abc123/paper.pdf")
+
+        assert result["status"] == "success"
+        assert len(result["content"]) == 1
+        doc = result["content"][0]["document"]
+        assert doc["format"] == "pdf"
+        assert doc["source"]["bytes"] == pdf_bytes
+        assert "paper" in doc["name"]
+
+    @mock_aws
+    def test_cleans_up_tmp_file_after_reading(self):
+        import glob
+
+        import boto3
+
+        s3 = boto3.client("s3", region_name="ap-southeast-2")
+        s3.create_bucket(Bucket="test-uploads", CreateBucketConfiguration={"LocationConstraint": "ap-southeast-2"})
+        s3.put_object(Bucket="test-uploads", Key="uploads/abc123/paper.pdf", Body=b"%PDF-1.4 fake")
+
+        before = set(glob.glob("/tmp/*.pdf"))
+        read_pdf("uploads/abc123/paper.pdf")
+        after = set(glob.glob("/tmp/*.pdf"))
+
+        assert after == before

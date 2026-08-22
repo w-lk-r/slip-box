@@ -8,7 +8,7 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from model.load import load_model
 from config import SESSION_CACHE_SIZE
 from hooks import IngestOutcomeTracker
-from tools.notes import write_note, write_edge, search_notes, trigger_kb_sync, fetch_url, write_summary, update_summary
+from tools.notes import write_note, write_edge, search_notes, trigger_kb_sync, fetch_url, write_summary, update_summary, read_pdf
 
 load_dotenv()
 
@@ -30,6 +30,7 @@ For every note:
 - Write the body as ONE tight paragraph, roughly 3-6 sentences. Fold in why it matters and relevant context as part of stating the idea itself — don't tack them on as a separate paragraph. If the idea genuinely needs a second paragraph to stand on its own, that's a sign it's two ideas: split it into two notes instead of writing one long note.
 - Tag it with the key concepts it touches
 - Record the source URL if one was provided, via write_note's source_url param — and if the source material starts with a "Title:"/"Channel:" header (e.g. fetched YouTube content), pass those as source_title/source_author too rather than just repeating them in the note body
+- If ingesting an uploaded PDF, call read_pdf(pdf_key) first to read its content, then pass the same pdf_key to write_note's source_pdf_key param (not source_url) so the citation resolves correctly
 
 After writing notes, always search the knowledge base for related existing notes — there may already be things in the slip case that connect to what was just ingested.
 
@@ -48,7 +49,7 @@ SUMMARY CARDS: When searching the knowledge base, pay attention to clusters:
 
 Write precisely. The user should be able to understand the idea from the note alone, without returning to the source."""
 
-tools = [write_note, write_edge, write_summary, update_summary, search_notes, trigger_kb_sync, fetch_url]
+tools = [write_note, write_edge, write_summary, update_summary, search_notes, trigger_kb_sync, fetch_url, read_pdf]
 
 
 def agent_factory():

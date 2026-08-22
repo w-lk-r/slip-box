@@ -22,7 +22,8 @@
         { "name": "ITEMS_TABLE", "value": "slip-box-items" },
         { "name": "EDGES_TABLE", "value": "slip-box-edges" },
         { "name": "SOURCES_TABLE", "value": "slip-box-sources" },
-        { "name": "INGEST_SESSIONS_TABLE", "value": "slip-box-ingest-sessions" }
+        { "name": "INGEST_SESSIONS_TABLE", "value": "slip-box-ingest-sessions" },
+        { "name": "UPLOADS_BUCKET", "value": "slip-box-uploads-690445895420" }
       ],
       "additionalPolicies": [
         "policies/agent-permissions.json"

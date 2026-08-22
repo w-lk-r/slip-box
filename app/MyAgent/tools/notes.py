@@ -25,6 +25,7 @@ KB_ID = os.environ["KB_ID"]
 ITEMS_TABLE = os.environ["ITEMS_TABLE"]
 EDGES_TABLE = os.environ["EDGES_TABLE"]
 SOURCES_TABLE = os.environ["SOURCES_TABLE"]
+UPLOADS_BUCKET = os.environ["UPLOADS_BUCKET"]
 REGION = os.environ.get("AWS_REGION", os.environ.get("REGION", "ap-southeast-2"))
 
 s3 = boto3.client("s3", region_name=REGION)
@@ -74,16 +75,33 @@ def _normalize_source_key(url: str) -> str:
     return urllib.parse.urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, "", urllib.parse.urlencode(kept), ""))
 
 
-def _resolve_source(source_url: str, source_title: str = "", source_author: str = "") -> str | None:
+def _resolve_source(source_url: str = "", source_pdf_key: str = "", source_title: str = "", source_author: str = "") -> str | None:
     """
     Look up or create the Source record a note cites, deduped by
-    _normalize_source_key. Returns None if no source was given at all
-    (matches write_note's existing optional-source behavior).
+    _normalize_source_key for URL sources or a content hash for PDF sources.
+    PDF dedup can't key off the S3 key itself — every upload gets a fresh
+    upload_id/key, so two uploads of the byte-identical file would never
+    match. Instead it uses the object's ETag, which for a single (non-
+    multipart) PUT upload — the only kind this project's presigned-upload
+    flow does — IS the MD5 of the content, so this is a real content hash
+    without a full re-download just to compute one. Returns None if no
+    source was given at all (matches write_note's existing optional-source
+    behavior). source_pdf_key takes priority if both are somehow given.
     """
-    if not source_url:
+    if source_pdf_key:
+        etag = s3.head_object(Bucket=UPLOADS_BUCKET, Key=source_pdf_key)["ETag"].strip('"')
+        source_key = f"pdf:{etag}"
+        title = source_title or source_pdf_key.rsplit("/", 1)[-1]
+        source_type = "pdf"
+        url = ""
+    elif source_url:
+        source_key = _normalize_source_key(source_url)
+        title = source_title or source_url
+        source_type = "youtube" if _youtube_video_id(source_url) else "web"
+        url = source_url
+    else:
         return None
 
-    source_key = _normalize_source_key(source_url)
     existing = ddb.Table(SOURCES_TABLE).query(
         IndexName="source-key-index",
         KeyConditionExpression=Key("source_key").eq(source_key),
@@ -92,8 +110,6 @@ def _resolve_source(source_url: str, source_title: str = "", source_author: str 
     if existing:
         return existing[0]["source_id"]
 
-    title = source_title or source_url
-    source_type = "youtube" if _youtube_video_id(source_url) else "web"
     source_id = f"{_slugify(title)}-{uuid.uuid4().hex[:8]}"
     now = datetime.datetime.utcnow().isoformat()
     ddb.Table(SOURCES_TABLE).put_item(Item={
@@ -102,7 +118,7 @@ def _resolve_source(source_url: str, source_title: str = "", source_author: str 
         "type": source_type,
         "title": title,
         "author": source_author,
-        "url": source_url,
+        "url": url,
         "retrieved_at": now,
         "created_at": now,
     })
@@ -201,7 +217,7 @@ def _regenerate_note_links(note_id: str) -> None:
 
 
 @tool
-def write_note(title: str, body: str, source_url: str = "", source_title: str = "", source_author: str = "", tags: list[str] = []) -> dict:
+def write_note(title: str, body: str, source_url: str = "", source_pdf_key: str = "", source_title: str = "", source_author: str = "", tags: list[str] = []) -> dict:
     """
     Write an atomic literature note to the slip case knowledge base.
 
@@ -215,6 +231,9 @@ def write_note(title: str, body: str, source_url: str = "", source_title: str = 
         source_url: URL of the source material, if any. The same URL always
             resolves to the same Source record (deduped), so re-ingesting the
             same source doesn't create a duplicate citation.
+        source_pdf_key: S3 key of an uploaded PDF source, if any (the same
+            pdf_key passed to read_pdf) — mutually exclusive with source_url.
+            The same PDF always resolves to the same Source record.
         source_title: Title of the source itself (article headline, video title —
             distinct from this note's own title), if known
         source_author: Author, channel, or publisher of the source, if known
@@ -227,8 +246,9 @@ def write_note(title: str, body: str, source_url: str = "", source_title: str = 
     s3_key = f"{note_id}.md"
     today = datetime.date.today().isoformat()
 
-    source_id = _resolve_source(source_url, source_title, source_author)
-    source_field = f"[[{source_id}|{source_title or source_url}]]" if source_id else ""
+    source_id = _resolve_source(source_url, source_pdf_key, source_title, source_author)
+    source_display = source_title or source_url or (source_pdf_key.rsplit("/", 1)[-1] if source_pdf_key else "")
+    source_field = f"[[{source_id}|{source_display}]]" if source_id else ""
 
     tag_lines = "\n".join(f"  - {t}" for t in tags) if tags else "  []"
     md_content = f"""---
@@ -583,6 +603,39 @@ def _fetch_youtube(video_id: str, original_url: str) -> str:
                           "the title/channel alone if that's enough, or tell the user none was found.")[:FETCH_URL_MAX_CHARS]
 
     return (header + text)[:FETCH_URL_MAX_CHARS]
+
+
+@tool
+def read_pdf(pdf_key: str) -> dict:
+    """
+    Read an uploaded PDF and return it as a document for you to read natively
+    (text, tables, layout) — no separate text-extraction step. Call this
+    first when ingesting an uploaded PDF, before write_note; pass the same
+    pdf_key to write_note's source_pdf_key param afterward so the citation
+    resolves correctly.
+
+    Args:
+        pdf_key: S3 key of the uploaded PDF within the uploads bucket, e.g.
+            "uploads/{upload_id}/{filename}.pdf"
+
+    Returns:
+        The PDF as a document content block for you to read directly.
+    """
+    filename = pdf_key.rsplit("/", 1)[-1]
+    tmp_path = f"/tmp/{uuid.uuid4().hex}.pdf"
+    try:
+        s3.download_file(UPLOADS_BUCKET, pdf_key, tmp_path)
+        with open(tmp_path, "rb") as f:
+            content = f.read()
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    neutral_name = f"{os.path.splitext(filename)[0]}-{uuid.uuid4().hex[:8]}"
+    return {
+        "status": "success",
+        "content": [{"document": {"name": neutral_name, "format": "pdf", "source": {"bytes": content}}}],
+    }
 
 
 @tool

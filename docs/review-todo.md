@@ -62,9 +62,9 @@ down to 6 real Source records. See `docs/build-log.md` for the full
 implementation notes and the plan file it was built from.
 
 Explicitly deferred, not part of this fix: Source as a graph-visible node
-type (`/graph` showing Source nodes, a `RESEARCHED_VIA` edge) and PDF
-ingestion itself — both build on this schema (`type: "pdf"`, a content-hash
-`source_key` instead of a normalized URL) once picked up.
+type (`/graph` showing Source nodes, a `RESEARCHED_VIA` edge). PDF ingestion
+itself is now built — see #6's update below; it uses exactly the `type:
+"pdf"` + content-hash `source_key` shape sketched here.
 
 ## 4. `related_to`/`grounded_in` aren't wikilinks
 
@@ -103,9 +103,23 @@ a fallback for any non-mobile ingestion path, and as what a share still
 degrades to if the client-side fetch itself fails. Verified end-to-end against
 the live deployed stack in both directions — see `docs/build-log.md`.
 
-PDF is still unhandled — blind regex HTML-stripping on whatever `httpx`
-returns, no branch for PDF text extraction. A PDF URL would still get
-mangled rather than routed to a proper extractor.
+PDF is now handled — RESOLVED 2026-08-22, but via a separate upload path,
+not `fetch_url`: a web upload page (`app/web/app/upload/page.tsx`) presigns
+direct-to-S3 PUTs into a new `slip-box-uploads` bucket, then `POST /ingest`
+with a `pdf_key` tells the agent to call the new `read_pdf` tool, which
+downloads the object and returns it as a Bedrock **document content block**
+(`ToolResultContent`'s native `document` key) — the model reads the PDF
+natively (text, tables, layout), no separate Python text-extraction library.
+Source dedup uses the S3 object's ETag (the MD5 of its bytes for a
+non-multipart PUT) as a content hash, not the S3 key itself, since every
+upload gets a fresh key — verified live that two uploads of the
+byte-identical PDF under different keys correctly resolve to the same
+`Source` record. Mobile share-sheet PDF support was explicitly scoped out
+of this pass — `app.json`'s iOS activation rules only allow text/URL today,
+adding files needs a native config-plugin change plus a fresh `eas build`.
+No page-count/file-size cap yet — a large-enough PDF will hit Bedrock's own
+document-size limits and just fail; worth a simple upload-size guardrail
+before this is used on anything book-length.
 
 ## 7. Research agent (`--research` fan-out) doesn't exist yet — design notes for when it's built
 

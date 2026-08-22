@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import ForceGraph2D, { type GraphData, type LinkObject, type NodeObject } from 'react-force-graph-2d';
 
 import EdgePanel from '@/components/EdgePanel';
@@ -260,6 +261,13 @@ export default function GraphView() {
       />
 
       <Legend nodeColors={NODE_COLORS} edgeColors={EDGE_COLORS} />
+
+      <Link
+        href="/upload"
+        className="fixed bottom-4 right-4 z-10 rounded-full bg-black/70 px-3 py-2 text-xs text-neutral-200 shadow backdrop-blur-sm hover:bg-black/90"
+      >
+        Upload PDFs
+      </Link>
 
       {selectedNodeId && <NodePanel noteId={selectedNodeId} onClose={() => setSelectedNodeId(null)} />}
       {selectedEdge && (

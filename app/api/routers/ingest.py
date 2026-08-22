@@ -35,6 +35,12 @@ def _build_prompt(req: IngestRequest) -> str:
             f"the content below is already the full source): {req.source_url}\n\n{req.text}"
             if req.source_url else req.text
         )
+    elif req.pdf_key:
+        source = (
+            f'Ingest this uploaded PDF: call read_pdf(pdf_key="{req.pdf_key}") first to read it, '
+            f'then write notes from its content. Pass source_pdf_key="{req.pdf_key}" to write_note '
+            f"(not source_url) so the citation resolves to this PDF."
+        )
     else:
         source = f"Ingest this URL: {req.url}"
     instruction = _mode_instruction(req)

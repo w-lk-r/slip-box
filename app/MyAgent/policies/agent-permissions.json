@@ -11,6 +11,12 @@
       ]
     },
     {
+      "Sid": "S3Uploads",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": ["arn:aws:s3:::slip-box-uploads-690445895420/*"]
+    },
+    {
       "Sid": "KBRetrieve",
       "Effect": "Allow",
       "Action": [

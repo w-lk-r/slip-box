@@ -82,6 +82,7 @@ export class ApiStack extends Stack {
         EDGES_TABLE: 'slip-box-edges',
         SOURCES_TABLE: 'slip-box-sources',
         INGEST_SESSIONS_TABLE: 'slip-box-ingest-sessions',
+        UPLOADS_BUCKET: 'slip-box-uploads-690445895420',
         AGENT_RUNTIME_ARN: agentRuntimeArn,
         WORKER_FUNCTION_NAME: workerFn.functionName,
       },
@@ -137,6 +138,17 @@ export class ApiStack extends Stack {
         sid: 'IngestSessionsRead',
         actions: ['dynamodb:GetItem'],
         resources: ['arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-ingest-sessions'],
+      })
+    );
+    apiFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'UploadsPresign',
+        // Presigning is a local SigV4 operation with no live AWS call, but
+        // S3 still evaluates the *signer's* IAM permissions when the
+        // presigned URL is later actually used — the signer needs PutObject
+        // even though this Lambda never calls it directly.
+        actions: ['s3:PutObject'],
+        resources: ['arn:aws:s3:::slip-box-uploads-690445895420/*'],
       })
     );
 
