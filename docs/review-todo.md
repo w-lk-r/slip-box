@@ -207,7 +207,9 @@ add agent` per route — matches the "four separate Strands agents" framing
 literally, isolates blast radius/scaling/cost per flow, but means N cold
 starts and N deploy surfaces instead of one).
 
-## 9. DynamoDB has no reconciliation path for edits made directly in S3/KB — clobber bug RESOLVED 2026-08-21, Lambda still open
+## 9. DynamoDB has no reconciliation path for edits made directly in S3/KB — NEXT UP (2026-08-22), clobber bug RESOLVED 2026-08-21, Lambda still open
+
+**Flagged next up 2026-08-22** — reprioritized ahead of #7 (`--research` fan-out) and #8 (classification split). The remaining Lambda half below has been sitting as "not urgent, no trigger yet" since the clobber-bug fix, but every schema-touching feature landed since (Source model, ingest-outcome tracking, PDF ingestion, Guardrails) has widened the surface for DynamoDB/S3 to drift — worth closing this gap while the schema is still relatively simple rather than letting more features stack on top of a known-inconsistent read path.
 
 `update_summary`'s clobber bug is fixed: it now reuses `write_edge`'s
 `_parse_frontmatter`/`_render_frontmatter` helpers to regenerate frontmatter
@@ -234,19 +236,115 @@ listed as future work) — the gap isn't just missing two-way sync, the
 current code actively fights a one-off S3 edit even without Obsidian in the
 picture.
 
-**Fix:** S3 event notification (suffix-filtered to `.md`, so the
-`.md.metadata.json` sidecar is excluded) → Lambda that parses frontmatter
-and upserts the DynamoDB row, keyed on the frontmatter's `note_id` field
-(not the S3 object key) so renames self-heal instead of orphaning. Handle
-`ObjectRemoved` too, so deleted notes don't leave orphaned rows. Keep this
-decoupled from KB reindexing — reconciling a DynamoDB row is cheap and can
-fire per-object, but starting a Bedrock ingestion job is a batched,
-non-trivial-cost operation and shouldn't fire on every single write; keep
-`trigger_kb_sync` on its own (debounced or explicit) cadence. Fail soft on
-malformed frontmatter (log + skip) rather than crash, since manual edits
-will eventually have YAML typos. This is new infra in the
-`agentcore/cdk/` app stack (`SlipBox-App-*` — S3, DynamoDB, Neptune later),
-not the agent's `agentcore.json` policies.
+**Combined design, worked out 2026-08-22 — also covers the brand-new
+outside-created-note case (previously its own item, now folded in here).**
+Two stages, split by whether an LLM is actually needed — Stage 1 owns the
+hard consistency guarantee unconditionally; Stage 2 is optional,
+best-effort semantic reconciliation layered on top.
+
+**Stage 1 — deterministic, no agent, must never depend on model judgment
+succeeding.** S3 event notification (suffix-filtered to `.md`, so the
+`.md.metadata.json` sidecar is excluded) → Lambda, fired on both
+`ObjectCreated` and `ObjectRemoved`:
+- **`ObjectCreated`/modified:** parse frontmatter, upsert the DynamoDB row,
+  keyed on the frontmatter's `note_id` field (not the S3 object key) so
+  renames self-heal instead of orphaning. If `note_id` is missing entirely
+  (a note created outside the system entirely, e.g. via Obsidian sync),
+  generate one the same way `write_note` does
+  (`{_slugify(title)}-{uuid8}`), rewrite the file's frontmatter with it,
+  and backfill other missing required fields with sane defaults (empty
+  typed-link lists, `type: literature-note` if unspecified,
+  `authored_by: user`) plus a freshly-generated `.md.metadata.json`
+  sidecar — all still cheap and deterministic.
+- **`ObjectRemoved`:** full three-direction cleanup, not just deleting the
+  `items` row — this project got bitten by exactly this gap twice this
+  session, hand-cleaning up test notes (see
+  `docs/schema-change-checklist.md`'s three-direction rule): delete
+  outgoing edges (`from_id` query), delete incoming edges (`to_id-index`
+  query), and remove the note from any summary card's `grounded_in` list
+  (regenerating that card's frontmatter). Skipping any of the three leaves
+  a dangling reference that crashes the graph view's force-simulation on
+  load.
+- Keyed decision, cheap to compute: only mark a note as needing Stage 2
+  (below) when its **body** actually changed — a content-hash comparison
+  against the previous S3 version — not on a frontmatter-only edit (tags,
+  a typo fix). Otherwise every trivial hand-edit burns a full model
+  invocation for no reason.
+- Fail soft on malformed frontmatter (log + skip) rather than crash, since
+  manual edits will eventually have YAML typos.
+- Keep decoupled from KB reindexing — reconciling a DynamoDB row is cheap
+  and can fire per-object, but starting a Bedrock ingestion job is
+  batched/non-trivial-cost and shouldn't fire on every single write; keep
+  `trigger_kb_sync` on its own (debounced or explicit) cadence.
+- New infra in the `agentcore/cdk/` app stack (`SlipBox-App-*`), not the
+  agent's `agentcore.json` policies.
+
+**Stage 2 — agent-triggered, optional/best-effort, only when Stage 1 flags
+it.** Fires an async call into the *same* invocation path `POST /ingest`'s
+`WorkerFunction` already uses (`invoke_agent_runtime`), with a prompt
+scoped to reconciliation rather than fresh ingestion — e.g. "note
+`{note_id}`'s content changed outside the normal flow — search the KB and
+check whether its connections still make sense; propose corrections if
+not," skipping `write_note` entirely. Reuses the agent's existing
+`search_notes` → `write_edge` loop, confidence-gated exactly like every
+other edge write — "if and only if needed" falls directly out of the
+existing threshold rather than needing new logic. Deliberately **not**
+wired into Stage 1's own core guarantee: if Stage 2 never runs (guardrail
+false positive, model error, budget skip), DynamoDB is still correct —
+only the semantic reclassification is missed, not the sync itself.
+- **Delete case, same mechanism, opt-in trigger:** when Stage 1 processes
+  an `ObjectRemoved` for a note that had direct edges, capture its former
+  neighbor `note_id`s *before* deleting those edges, and optionally fire a
+  Stage 2 review asking whether the former neighbors now warrant a direct
+  connection to each other. This is **not** automatic transitive
+  reattachment (A–B–C does not imply A–C — edge types aren't transitive,
+  and deletion is often a deliberate signal the user doesn't want that
+  connection anymore) — it's the agent independently re-deriving a
+  relationship via its normal `search_notes`/confidence-gate judgment,
+  same as any other reclassification.
+- **Why route through the FastAPI worker rather than a bespoke
+  Lambda→agent call:** invoke asynchronously, don't block on the LLM, IAM
+  scoped narrowly to just `InvokeAgentRuntime` — exactly what
+  `WorkerFunction` (`app/api/worker.py`) already is. No new pattern, just
+  a new caller and prompt template. New plumbing needed: the
+  reconciliation Lambda needs `lambda:InvokeFunction` on `WorkerFunction`,
+  the same grant `ApiFunction` already has.
+
+**Two alternatives considered and deliberately not adopted:**
+- **DynamoDB as source of truth, S3 derived from it** — doesn't actually
+  avoid the reconciliation problem, just relocates the clobber risk to the
+  side that matters more: this product's core premise is notes as
+  portable, human-editable files (`aws s3 sync` to Obsidian), so making
+  the file a regenerated artifact risks silently overwriting a human edit
+  the same way `update_summary`'s now-fixed clobber bug did to
+  frontmatter. Also moot regardless — the Bedrock KB only embeds from S3,
+  so the file has to exist no matter which store is "authoritative."
+- **DynamoDB Streams → Lambda → S3 for the agent's own writes** (mirroring
+  Stage 1 in the other direction) — not adopted, because the agent
+  routinely writes several related notes/edges in one turn, and two call
+  sites depend on reading DynamoDB back *within that same turn*:
+  `_regenerate_note_links`'s title lookup (a same-batch cross-reference
+  would resolve to a stale/missing title) and `_resolve_source`'s dedup
+  check (a same-batch duplicate source citation would create a redundant
+  Source record instead of deduping — the exact bug class already fixed
+  once in the Source model build). The agent's tools keep writing S3 and
+  DynamoDB directly, synchronously, as they do today; only S3-originated
+  changes (human edits, anything outside the agent's own tools) go
+  through Stage 1.
+
+**Build order: Stage 1 first, as its own complete increment — don't wait to
+build Stage 2 alongside it.** Stage 1 alone already delivers the actual
+guarantee this item exists for (DynamoDB never silently drifts from S3),
+is fully deterministic and testable without touching the agent or Bedrock
+at all, and Stage 2 has no dependency running the other direction — it's
+purely additive once Stage 1 exists. Concretely: CDK (S3 event
+notification + the Lambda + its own minimal DynamoDB/S3 IAM), the
+Lambda's frontmatter-parse-and-upsert logic (reusing
+`_parse_frontmatter`/`_render_frontmatter` from `tools/notes.py` rather
+than reimplementing), the `ObjectRemoved` three-direction cleanup, deploy,
+verify against a real hand-edit and a real delete. Stage 2 (the
+`WorkerFunction` call, the body-diff gate, the delete-neighbor review) is
+a separate follow-on pass once Stage 1 is live and verified.
 
 ## 10. Bidirectional Obsidian/S3 sync — open question, not scoped yet
 
@@ -304,89 +402,21 @@ burn Bedrock spend or spam the KB with junk.
   not as a follow-up after `/ingest` ships open — an unauthenticated,
   unvalidated ingestion endpoint is an easy thing to demo past and forget.
 
-## 12. Local-filesystem-created notes need sidecar + frontmatter backfill + linkage triggering, not just DynamoDB reconciliation
-
-Extends #9: the S3 Event Notification → Lambda sketched there handles
-metadata reconciliation for notes the agent already wrote (backfilling
-DynamoDB when a hand-edit changes title/tags). It doesn't cover the harder
-case — a note created **entirely outside the system**, written directly in
-a local Obsidian vault, then pushed up via
-`aws s3 sync ~/ObsidianVault/SlipBox/ s3://slip-box-notes/` (the push
-direction of the one-way sync already documented in `future-scope.md`). A
-file arriving this way is missing three things the rest of the system
-assumes exist:
-
-1. **No `.md.metadata.json` sidecar** — required by the Bedrock KB to treat
-   frontmatter as filterable metadata rather than embedding it as content
-   (the sidecar requirement in root `CLAUDE.md`). A raw Obsidian file won't
-   have one.
-2. **Possibly incomplete/malformed frontmatter** — a hand-written note may
-   be missing `note_id`, `type`, `date`, or the typed link-list fields
-   (`supports: []` etc.) the rest of the system assumes are present.
-3. **No linkages** — the actual point of ingestion (typed-relationship
-   classification against the existing corpus) never ran, since the note
-   never passed through the ingestion agent's `search_notes`/`write_edge`
-   flow.
-
-**Two-stage design, split by whether an LLM is actually needed:**
-
-- **Stage 1 — Lambda-only, no agent involved** (extends #9's Lambda): on
-  `ObjectCreated`, parse frontmatter. If `note_id` is missing, generate one
-  the same way `write_note` does (`{_slugify(title)}-{uuid8}`) and rewrite
-  the file's frontmatter with it, so the S3 copy and DynamoDB agree going
-  forward. Backfill other missing required fields with sane defaults
-  (empty typed-link lists, `type: literature-note` if unspecified,
-  `authored_by: user`). Write/regenerate the `.md.metadata.json` sidecar
-  from the now-normalized frontmatter. Upsert the DynamoDB `items` row. All
-  of this is cheap, deterministic, and needs no Bedrock call.
-- **Stage 2 — needs the agent, triggered from Stage 1's Lambda**: once the
-  note is normalized and has a stable `note_id`, fire an async call into
-  the *same* invocation path `POST /ingest`'s `WorkerFunction` already uses
-  (`invoke_agent_runtime`) — but with a distinct prompt, since this note
-  already exists and shouldn't be re-written: something like "note
-  `{note_id}` was just added outside the ingestion flow — search the KB
-  and propose `write_edge` calls for how it relates to existing notes,"
-  skipping `write_note` entirely. This reuses the classification behavior
-  already built into the ingestion agent's system prompt instead of
-  duplicating search/scoring logic in the Lambda — the Lambda's job stays
-  structural normalization, the agent's job stays semantic classification,
-  matching the split #8 already argues for.
-
-**Why route through the FastAPI worker rather than a bespoke Lambda→agent
-call:** the shape needed here — invoke asynchronously, don't block on the
-LLM, IAM scoped narrowly to just `InvokeAgentRuntime` — is exactly what
-`WorkerFunction` (`app/api/worker.py`) already is. No new pattern to
-design, just a new caller and a new prompt template. The only new plumbing
-is IAM: the reconciliation Lambda needs `lambda:InvokeFunction` on
-`WorkerFunction`, the same grant `ApiFunction` already has.
-
-**Not urgent for MVP** — like #9's own fix, this only matters once
-something writes to S3 outside the agent's own tools. `PermanentNote`'s
-direct write path (frontend → FastAPI → S3+DynamoDB, no agent — still
-out of scope per the FastAPI backend plan) will exercise this before
-Obsidian sync does; worth building alongside `/notes` rather than waiting
-for local-sync specifically.
-
 ---
 
-*Recommended order: #1 unblocks #2 and is the app's core value prop. #3
-(structured Source records, resolved 2026-08-22) and #6 (YouTube half
-resolved same day) should land before #7 — the research agent is the
-workload that will hammer sourcing hardest, and is the first caller that
-actually needs PDF-aware fetching (the one remaining piece of #6) and
-real dedup (now built, via #3). #4–#5 are independent metadata/provenance
-polish. #8 is a structural decision worth settling before #1 and #7 are
-built, since it determines whether classification/research land as
-in-process Agent-as-Tool calls or standalone AgentCore agents. #9 should
-land early too — it's infra, not agent logic, so it can be built in
-parallel with #1, and every other item that writes frontmatter (#1, #3, #4)
-benefits from DynamoDB being a reliable materialized view instead of a
-separately-mutated copy. #10 is downstream of #9 — don't start it first.
-#11 must land with the FastAPI backend itself, not after — the fetch_url →
-agent path is a live prompt-injection surface the moment `/ingest` is
-public. #12 is downstream of both #9 (extends its Lambda) and the FastAPI
-backend (reuses its worker) — don't start it before either exists, and it
-has no urgency until something writes new notes to S3 outside the agent.*
+*Recommended order, updated 2026-08-22: #1, #2, #3, #6, and #11 are all
+resolved; the note-created-entirely-outside-the-system case (missing
+`note_id`/sidecar, no linkages — previously its own item) is folded into
+#9's Stage 1/Stage 2 design below, not tracked separately anymore.
+**#9 is next up** — flagged ahead of #7/#8 (see #9's own note) since
+it's infra, not agent logic, and every schema-touching feature landed so far
+(Source model, ingest-outcome tracking, PDF ingestion, Guardrails) has
+widened the surface for DynamoDB/S3 drift; closing it now means #7/#8 get
+built on a reliable materialized view instead of a separately-mutated copy.
+#10 is downstream of #9 — don't start it first. #7 (`--research` fan-out) and
+#8 (classification split, a structural decision worth settling before #7) are
+the two big remaining feature items after #9. #4–#5 are independent
+metadata/provenance polish, no dependency on anything above.*
 
 ## 13. Agent session-caching machinery is currently inert — needs a decision, not urgent
 
