@@ -173,6 +173,8 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 - Custom `@tool` functions — Neptune writes, DynamoDB writes, YouTube transcript extraction, SWOT logic
 - `handoff_to_user` — confidence-gated human review
 
+**Before hand-building a new tool or capability, check whether `strands-agents-tools` (`strands_tools`) or the AgentCore SDK already ships it** — e.g. `file_read` already does real PDF extraction, `tavily`/`exa` already do web search, AgentCore ships a managed Browser sandbox. See the `.claude/skills/strands-agents-sdk` and `.claude/skills/bedrock-agentcore` skills' "Premade tools/capabilities" sections for what's already there. Re-run that audit (install into a scratch dir, read the real installed source — don't trust a stale list) before starting `--research` fan-out or PDF ingestion specifically if it's been more than a few weeks since the skills' last-checked date (2026-08-22) — the package may have added or changed tools since.
+
 ### Note taxonomy: literature notes, ideas, summary cards
 
 Not a uniform rule across all three: `Item` and `SummaryCard` are information transformation (AI doing this well doesn't undercut the method) and carry `authored_by: model | user`; `PermanentNote` is where the human forming the idea in their own words is the actual point, so it's user-authored only.
