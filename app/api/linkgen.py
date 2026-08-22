@@ -2,17 +2,25 @@
 Frontmatter link regeneration — trimmed copy of the same-named functions in
 app/MyAgent/tools/notes.py. Duplicated rather than shared because this package
 and MyAgent are two separate deployable units (Lambda zip vs. AgentCore Runtime
-CodeZip) with no shared-library convention in this repo. Keep in sync manually;
-if a third consumer of this logic shows up (e.g. review-todo #9's S3
-reconciliation Lambda), that's the point to extract a real shared package.
+CodeZip) with no shared-library convention in this repo. Keep in sync manually.
+reconciler.py (review-todo #9's Stage 1) is a consumer of this module too, but
+lives in this same package, so it imports these functions directly rather than
+needing its own copy.
 """
 import logging
+import re
 
 from boto3.dynamodb.conditions import Key
 
 from clients import S3_BUCKET, edges_table, items_table, s3
 
 log = logging.getLogger(__name__)
+
+
+def slugify(title: str) -> str:
+    slug = re.sub(r'[^\w\s-]', '', title.lower())
+    slug = re.sub(r'[\s_-]+', '-', slug)
+    return slug.strip('-')[:60]
 
 # Frontmatter link field each edge type is written into on the *source* note's
 # own card (Luhmann-style — connections live on the card, not a separate index).

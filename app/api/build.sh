@@ -19,7 +19,7 @@ uv pip install \
   --python 3.14 \
   -r requirements.lock.txt
 
-cp main.py worker.py models.py clients.py linkgen.py serialize.py build/
+cp main.py worker.py reconciler.py models.py clients.py linkgen.py serialize.py build/
 cp -r routers build/
 
 echo "Built app/api/build/ ($(du -sh build | cut -f1))"

@@ -2,6 +2,8 @@ import { Duration, Stack, type StackProps } from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -150,6 +152,84 @@ export class ApiStack extends Stack {
         actions: ['s3:PutObject'],
         resources: ['arn:aws:s3:::slip-box-uploads-690445895420/*'],
       })
+    );
+
+    // review-todo.md #9 Stage 1 — deterministic S3 -> DynamoDB reconciliation,
+    // no agent involved. Triggered by an S3 event notification on
+    // NotesBucket (owned by AppStack), so DynamoDB's items table never
+    // silently drifts from S3 regardless of write origin (agent tools, a
+    // hand-edit, aws s3 sync).
+    const reconcilerFn = new lambda.Function(this, 'ReconcilerFunction', {
+      functionName: 'slip-box-reconciler',
+      runtime: lambda.Runtime.PYTHON_3_14,
+      architecture: lambda.Architecture.ARM_64,
+      handler: 'reconciler.handler',
+      code: codeAsset,
+      timeout: Duration.seconds(30),
+      memorySize: 512,
+      environment: {
+        // reconciler.py only reads S3_BUCKET/ITEMS_TABLE/EDGES_TABLE, but it
+        // imports linkgen.py, which imports clients.py, which reads every
+        // one of these unconditionally at module import time — so all of
+        // them have to be set even though this function only uses three.
+        S3_BUCKET: 'slip-box-notes',
+        ITEMS_TABLE: 'slip-box-items',
+        EDGES_TABLE: 'slip-box-edges',
+        SOURCES_TABLE: 'slip-box-sources',
+        INGEST_SESSIONS_TABLE: 'slip-box-ingest-sessions',
+        UPLOADS_BUCKET: 'slip-box-uploads-690445895420',
+        AGENT_RUNTIME_ARN: agentRuntimeArn,
+      },
+    });
+    reconcilerFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'NotesReadWrite',
+        // PutObject is only exercised by the missing-note_id backfill case
+        // (a note created entirely outside the system) — everything else
+        // only ever reads.
+        actions: ['s3:GetObject', 's3:PutObject'],
+        resources: ['arn:aws:s3:::slip-box-notes/*'],
+      })
+    );
+    reconcilerFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ItemsReadWrite',
+        actions: ['dynamodb:PutItem', 'dynamodb:GetItem', 'dynamodb:DeleteItem', 'dynamodb:Scan', 'dynamodb:UpdateItem'],
+        resources: ['arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-items'],
+      })
+    );
+    reconcilerFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'EdgesReadDelete',
+        actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:DeleteItem'],
+        resources: [
+          'arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-edges',
+          'arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-edges/index/to_id-index',
+        ],
+      })
+    );
+
+    // Imported by name rather than a cross-stack construct reference —
+    // NotesBucket lives in AppStack, deployed independently on purpose (see
+    // both stacks' own top-of-file comments). addEventNotification() on an
+    // imported bucket calls s3:PutBucketNotificationConfiguration via a
+    // custom resource at deploy time rather than through the bucket's own
+    // CloudFormation-owned properties, so this works with no export/import
+    // coupling between the two stacks. One real tradeoff: that S3 API call
+    // sets the bucket's entire notification config, not an incremental add
+    // — safe today since nothing else configures notifications on
+    // slip-box-notes, but if anything ever does, whichever deploys last
+    // wins.
+    const notesBucket = s3.Bucket.fromBucketName(this, 'ImportedNotesBucket', 'slip-box-notes');
+    notesBucket.addEventNotification(
+      s3.EventType.OBJECT_CREATED,
+      new s3n.LambdaDestination(reconcilerFn),
+      { suffix: '.md' }
+    );
+    notesBucket.addEventNotification(
+      s3.EventType.OBJECT_REMOVED,
+      new s3n.LambdaDestination(reconcilerFn),
+      { suffix: '.md' }
     );
 
     const api = new apigateway.LambdaRestApi(this, 'Api', {

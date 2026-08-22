@@ -207,7 +207,7 @@ add agent` per route — matches the "four separate Strands agents" framing
 literally, isolates blast radius/scaling/cost per flow, but means N cold
 starts and N deploy surfaces instead of one).
 
-## 9. DynamoDB has no reconciliation path for edits made directly in S3/KB — NEXT UP (2026-08-22), clobber bug RESOLVED 2026-08-21, Lambda still open
+## 9. DynamoDB has no reconciliation path for edits made directly in S3/KB — Stage 1 RESOLVED 2026-08-22, Stage 2 + staging bucket still open
 
 **Flagged next up 2026-08-22** — reprioritized ahead of #7 (`--research` fan-out) and #8 (classification split). The remaining Lambda half below has been sitting as "not urgent, no trigger yet" since the clobber-bug fix, but every schema-touching feature landed since (Source model, ingest-outcome tracking, PDF ingestion, Guardrails) has widened the surface for DynamoDB/S3 to drift — worth closing this gap while the schema is still relatively simple rather than letting more features stack on top of a known-inconsistent read path.
 
@@ -332,19 +332,56 @@ only the semantic reclassification is missed, not the sync itself.
   changes (human edits, anything outside the agent's own tools) go
   through Stage 1.
 
-**Build order: Stage 1 first, as its own complete increment — don't wait to
-build Stage 2 alongside it.** Stage 1 alone already delivers the actual
-guarantee this item exists for (DynamoDB never silently drifts from S3),
-is fully deterministic and testable without touching the agent or Bedrock
-at all, and Stage 2 has no dependency running the other direction — it's
-purely additive once Stage 1 exists. Concretely: CDK (S3 event
-notification + the Lambda + its own minimal DynamoDB/S3 IAM), the
-Lambda's frontmatter-parse-and-upsert logic (reusing
-`_parse_frontmatter`/`_render_frontmatter` from `tools/notes.py` rather
-than reimplementing), the `ObjectRemoved` three-direction cleanup, deploy,
-verify against a real hand-edit and a real delete. Stage 2 (the
-`WorkerFunction` call, the body-diff gate, the delete-neighbor review) is
-a separate follow-on pass once Stage 1 is live and verified.
+**Stage 1 built and live-verified 2026-08-22.** Lives in `app/api/reconciler.py`
+— reuses `linkgen.py`'s `parse_frontmatter`/`render_frontmatter`/
+`regenerate_note_links` directly (zero duplication: `linkgen.py`'s own
+docstring had already named this Lambda as the anticipated third consumer
+that would justify extraction, but since the reconciler lives in the same
+`app/api/` deployable unit, no extraction was needed at all — just import
+it). CDK: a new `ReconcilerFunction` in `api-stack.ts`, wired to
+`NotesBucket` (owned by `AppStack`) via `s3.Bucket.fromBucketName(...)` +
+`addEventNotification` rather than a cross-stack export — confirmed via a
+direct synth that this correctly generates a `Custom::S3BucketNotifications`
+resource with `Managed: false`, which CDK's own handler merges across
+stacks rather than blindly overwriting (softer than originally assumed —
+"whichever deploys last wins" isn't quite right; CDK actually tracks and
+merges per-stack notification entries safely).
+
+**Real bug caught in live verification, not by the test suite**:
+`regenerate_note_links` (called from Stage 1's own delete-cleanup, and
+separately from the agent's `write_edge`/`update_summary`) rewrites a
+note's file to S3 — which re-triggers Stage 1's own upsert handler on that
+same key. The first implementation used a full `put_item` there, which
+silently wiped attributes Stage 1 doesn't manage (`grounded_in`, caught
+directly in a live delete test against a real summary card) on that
+redundant re-trigger. Fixed by switching to a partial `update_item` (SET
+only the fields Stage 1 actually owns), making the self-retrigger
+idempotent instead of destructive — and added a regression test
+(`test_reupsert_preserves_attributes_it_doesnt_manage`) that reproduces
+this exact scenario, since the original test suite never simulated a
+same-key re-trigger and wouldn't have caught it.
+
+Also hit, unrelated: a new Lambda importing `linkgen.py` transitively
+imports `clients.py`, which reads *every* env var it needs unconditionally
+at module import time — so `ReconcilerFunction` needed all of
+`clients.py`'s required env vars set (`SOURCES_TABLE`,
+`INGEST_SESSIONS_TABLE`, `UPLOADS_BUCKET`, `AGENT_RUNTIME_ARN`), not just
+the three `reconciler.py` itself reads. `worker.py`'s own docstring had
+already flagged this exact tradeoff as the reason it avoids importing
+`clients.py` at all — the reconciler couldn't take that path since it
+needs `linkgen.py`, so it just accepts the fuller env var list instead.
+
+Live-verified: a real hand-edit (tags changed, `created_at` preserved); a
+real rename (same `note_id`, new key, one row not two); a real delete with
+both outgoing and incoming edges plus a summary card grounding the deleted
+note (all three cleanup directions confirmed, including the `grounded_in`
+fix above); a real missing-`note_id` note (hand-written, no frontmatter
+delimiters even) correctly backfilled, rewritten, sidecar generated, and
+reachable via `GET /items/{note_id}`. All test data cleaned up afterward.
+
+**Stage 2** (the `WorkerFunction` call, the body-diff gate, the
+delete-neighbor review) is a separate follow-on pass, not built here — it
+was never a dependency of Stage 1's own correctness, and stays that way.
 
 **Follow-on hardening, after Stage 1 is live: a staging bucket for `aws s3
 sync`, not a guardrail bolted onto Stage 1 itself.** Stage 1's fail-soft
@@ -440,19 +477,17 @@ burn Bedrock spend or spam the KB with junk.
 
 ---
 
-*Recommended order, updated 2026-08-22: #1, #2, #3, #6, and #11 are all
-resolved; the note-created-entirely-outside-the-system case (missing
-`note_id`/sidecar, no linkages — previously its own item) is folded into
-#9's Stage 1/Stage 2 design below, not tracked separately anymore.
-**#9 is next up** — flagged ahead of #7/#8 (see #9's own note) since
-it's infra, not agent logic, and every schema-touching feature landed so far
-(Source model, ingest-outcome tracking, PDF ingestion, Guardrails) has
-widened the surface for DynamoDB/S3 drift; closing it now means #7/#8 get
-built on a reliable materialized view instead of a separately-mutated copy.
-#10 is downstream of #9 — don't start it first. #7 (`--research` fan-out) and
-#8 (classification split, a structural decision worth settling before #7) are
-the two big remaining feature items after #9. #4–#5 are independent
-metadata/provenance polish, no dependency on anything above.*
+*Recommended order, updated 2026-08-22: #1, #2, #3, #6, #9 (Stage 1), and
+#11 are all resolved; the note-created-entirely-outside-the-system case
+(missing `note_id`/sidecar, no linkages — previously its own item) was
+folded into #9 and shipped with it, not tracked separately anymore. Still
+open under #9: Stage 2 (agent-triggered semantic reconciliation) and the
+`aws s3 sync` staging bucket — both explicit, non-blocking follow-ons, not
+required for the core guarantee #9 exists for. #10 is downstream of #9 —
+don't start it first. #7 (`--research` fan-out) and #8 (classification
+split, a structural decision worth settling before #7) are the two big
+remaining feature items. #4–#5 are independent metadata/provenance polish,
+no dependency on anything above.*
 
 ## 13. Agent session-caching machinery is currently inert — needs a decision, not urgent
 
