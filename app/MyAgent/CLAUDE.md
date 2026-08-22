@@ -22,6 +22,10 @@ Managed with `uv`. To install: `uv sync`
 
 Runtime deps are in `pyproject.toml`. The `.env` file (gitignored) holds local config — see `.env.sample` for the expected keys. In the cloud, `S3_BUCKET` and `KB_ID` are set via `envVars` in `agentcore.json`; `REGION` comes from `AWS_REGION` automatically.
 
+## Testing
+
+`uv run pytest` runs `tests/`. `moto` mocks DynamoDB for anything that touches it (`_resolve_source`) — no real AWS calls, no deploy needed. `tests/conftest.py` sets the env vars `tools/notes.py` reads at import time; add new table/env-var names there too if you add one. See root `CLAUDE.md`'s Testing section for when to add a test vs. just verifying live.
+
 ## Tools
 
 | Tool | Purpose |

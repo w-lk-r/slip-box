@@ -57,6 +57,9 @@ agentcore validate
 
 # Add a resource (memory, agent, gateway, etc.)
 agentcore add <resource>
+
+# Run the agent's Python test suite (from app/MyAgent/)
+uv run pytest
 ```
 
 Run agentcore commands from the repo root. The agentcore CLI reads `agentcore/agentcore.json` for config.

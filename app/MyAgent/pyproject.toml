@@ -23,3 +23,9 @@ dependencies = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
+
+[dependency-groups]
+dev = [
+    "moto>=5.2.2",
+    "pytest>=9.1.1",
+]
