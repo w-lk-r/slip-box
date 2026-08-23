@@ -607,6 +607,22 @@ def _fetch_youtube(video_id: str, original_url: str) -> dict:
     return {"title": title, "author": channel, "text": text[:FETCH_URL_MAX_CHARS]}
 
 
+_DISALLOWED_DOCUMENT_NAME_CHARS = re.compile(r'[^a-zA-Z0-9\s\-()\[\]]')
+
+
+def _sanitize_document_name(name: str) -> str:
+    """Bedrock's document content block only allows alphanumeric, whitespace,
+    hyphens, parentheses, and square brackets in a document name, with no
+    consecutive whitespace — real bug caught live: os.path.splitext only
+    strips the *last* extension, so periods/underscores from a filename or
+    URL slug (e.g. arXiv's "1706.03762", which has no .pdf suffix to strip
+    at all) reached ConverseStream unsanitized and crashed the whole turn
+    with a ValidationException, not just a tool-level error."""
+    cleaned = _DISALLOWED_DOCUMENT_NAME_CHARS.sub(" ", name)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned or "document"
+
+
 _TITLE_RE = re.compile(r'<title[^>]*>(.*?)</title>', re.IGNORECASE | re.DOTALL)
 _AUTHOR_META_PATTERNS = (
     re.compile(r'<meta[^>]+name=["\']author["\'][^>]+content=["\']([^"\']+)["\']', re.IGNORECASE),
@@ -655,7 +671,8 @@ def read_pdf(pdf_key: str) -> dict:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
 
-    neutral_name = f"{os.path.splitext(filename)[0]}-{uuid.uuid4().hex[:8]}"
+    base_name = _sanitize_document_name(os.path.splitext(filename)[0])
+    neutral_name = f"{base_name}-{uuid.uuid4().hex[:8]}"
     return {
         "status": "success",
         "content": [{"document": {"name": neutral_name, "format": "pdf", "source": {"bytes": content}}}],
@@ -692,7 +709,7 @@ def fetch_url(url: str) -> dict:
 
         content_type = response.headers.get("content-type", "")
         if "application/pdf" in content_type or url.lower().split("?")[0].endswith(".pdf"):
-            name = url.rsplit("/", 1)[-1].removesuffix(".pdf") or "document"
+            name = _sanitize_document_name(url.rsplit("/", 1)[-1].removesuffix(".pdf"))
             neutral_name = f"{name}-{uuid.uuid4().hex[:8]}"
             return {
                 "status": "success",

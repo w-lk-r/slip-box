@@ -92,14 +92,33 @@ class IngestOutcomeTracker(HookProvider):
 
     def _on_turn_end(self, event: AfterInvocationEvent) -> None:
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        # AfterInvocationEvent fires "regardless of whether it completed
+        # successfully or encountered an error" (Strands' own docstring), but
+        # carries no exception field — result is None is the only signal.
+        # Without this check, a crashed turn (e.g. an unhandled ValidationException
+        # from the model call) got recorded as status "complete" with a blank
+        # skipped_reason — indistinguishable from the agent legitimately
+        # deciding not to write anything, defeating the point of this tracker.
+        if event.result is None:
+            fields = {
+                "status": "error",
+                "error": "The agent turn ended without completing — check the "
+                "runtime logs for this session_id for the underlying exception.",
+                "completed_at": now,
+            }
+            try:
+                _update_session(self.session_id, fields)
+            except Exception:
+                log.exception("Failed to write ingest outcome for session %s", self.session_id)
+            return
+
         fields = {
             "status": "complete",
             "notes_created": self.notes_created,
             "completed_at": now,
         }
         if not self.notes_created:
-            message = event.result.message if event.result else None
-            fields["skipped_reason"] = _extract_skipped_reason(message)
+            fields["skipped_reason"] = _extract_skipped_reason(event.result.message)
         try:
             _update_session(self.session_id, fields)
         except Exception:

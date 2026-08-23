@@ -6,6 +6,8 @@ structured Source model lived exactly here (dedup normalization,
 frontmatter scalar handling), and were expensive to catch via live
 deploy-and-verify when a local test would catch them in milliseconds.
 """
+import re
+
 import httpx
 import pytest
 from moto import mock_aws
@@ -305,6 +307,24 @@ class TestReadPdf:
         assert "paper" in doc["name"]
 
     @mock_aws
+    def test_filename_with_periods_produces_a_valid_document_name(self):
+        # Real bug caught live: os.path.splitext only strips the *last*
+        # extension, so "notes.v2.pdf" -> "notes.v2" still has a period —
+        # Bedrock's document name only allows alphanumeric, whitespace,
+        # hyphens, parens, brackets, and this reached ConverseStream
+        # unsanitized, crashing the whole turn with a ValidationException.
+        import boto3
+
+        s3 = boto3.client("s3", region_name="ap-southeast-2")
+        s3.create_bucket(Bucket="test-uploads", CreateBucketConfiguration={"LocationConstraint": "ap-southeast-2"})
+        s3.put_object(Bucket="test-uploads", Key="uploads/abc123/notes.v2.pdf", Body=b"%PDF-1.4 fake")
+
+        result = read_pdf("uploads/abc123/notes.v2.pdf")
+
+        doc_name = result["content"][0]["document"]["name"]
+        assert re.fullmatch(r"[a-zA-Z0-9\s\-()\[\]]+", doc_name)
+
+    @mock_aws
     def test_cleans_up_tmp_file_after_reading(self):
         import glob
 
@@ -352,6 +372,16 @@ class TestFetchUrl:
         doc = result["content"][0]["document"]
         assert doc["format"] == "pdf"
         assert doc["source"]["bytes"] == pdf_bytes
+
+    def test_pdf_url_with_no_extension_and_dotted_id_produces_a_valid_document_name(self, fake_httpx):
+        # Real bug caught live against https://arxiv.org/pdf/1706.03762 — no
+        # .pdf suffix to strip at all, so the raw "1706.03762" (with periods)
+        # reached ConverseStream unsanitized and crashed the whole turn.
+        pdf_bytes = b"%PDF-1.4 fake pdf bytes"
+        fake_httpx({"arxiv.org": _FakeResponse(content=pdf_bytes, headers={"content-type": "application/pdf"})})
+        result = fetch_url("https://arxiv.org/pdf/1706.03762")
+        doc_name = result["content"][0]["document"]["name"]
+        assert re.fullmatch(r"[a-zA-Z0-9\s\-()\[\]]+", doc_name)
 
     def test_unreachable_url_raises(self, fake_httpx):
         fake_httpx({"example.com": _FakeResponse(status_code=404)})

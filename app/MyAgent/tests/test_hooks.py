@@ -117,6 +117,24 @@ class TestSessionWrite:
         assert item["notes_created"] == []
         assert item["skipped_reason"] == "This source doesn't cover the requested topic."
 
+    def test_crashed_turn_writes_error_status_not_complete(self, sessions_table):
+        # Real bug caught live: AfterInvocationEvent fires "regardless of
+        # whether it completed successfully or encountered an error" (per
+        # Strands' own docstring), with result=None on the error path. The
+        # old code did `event.result.message if event.result else None`,
+        # which happily wrote status "complete" with a blank skipped_reason
+        # for a turn that actually crashed (e.g. an unhandled
+        # ValidationException from the model call) — indistinguishable from
+        # the agent legitimately deciding not to write anything.
+        tracker = IngestOutcomeTracker("session-crashed")
+        crashed_event = AfterInvocationEvent(agent=None, result=None)
+
+        tracker._on_turn_end(crashed_event)
+
+        item = sessions_table.get_item(Key={"session_id": "session-crashed"})["Item"]
+        assert item["status"] == "error"
+        assert "error" in item
+
     def test_write_failure_does_not_raise(self, monkeypatch):
         # No table created — the update_item call will fail with a real
         # ClientError. The hook must swallow it, not blow up the agent's
