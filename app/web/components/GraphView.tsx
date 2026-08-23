@@ -7,21 +7,8 @@ import ForceGraph2D, { type GraphData, type LinkObject, type NodeObject } from '
 import EdgePanel from '@/components/EdgePanel';
 import NodePanel from '@/components/NodePanel';
 import Legend from '@/components/Legend';
+import { EDGE_COLORS, NODE_COLORS } from '@/lib/colors';
 import type { GraphEdge, GraphNode, GraphResponse } from '@/lib/types';
-
-const NODE_COLORS: Record<GraphNode['type'], string> = {
-  'literature-note': '#3b82f6',
-  'summary-card': '#a855f7',
-  'permanent-note': '#22c55e',
-};
-
-const EDGE_COLORS: Record<GraphEdge['type'], string> = {
-  SUPPORTS: '#22c55e',
-  CONTRADICTS: '#ef4444',
-  EXTENDS: '#3b82f6',
-  RELATED_TO: '#9ca3af',
-  GROUNDED_IN: '#a855f7',
-};
 
 // Not the backend's EDGE_CONFIDENCE_THRESHOLD (which gates whether an edge
 // gets written at all — everything reaching the graph already cleared that
@@ -267,6 +254,18 @@ export default function GraphView() {
         className="fixed bottom-4 right-4 z-10 rounded-full bg-black/70 px-3 py-2 text-xs text-neutral-200 shadow backdrop-blur-sm hover:bg-black/90"
       >
         Upload PDFs
+      </Link>
+      <Link
+        href="/review"
+        className="fixed bottom-16 right-4 z-10 rounded-full bg-black/70 px-3 py-2 text-xs text-neutral-200 shadow backdrop-blur-sm hover:bg-black/90"
+      >
+        Review
+      </Link>
+      <Link
+        href="/sources"
+        className="fixed bottom-28 right-4 z-10 rounded-full bg-black/70 px-3 py-2 text-xs text-neutral-200 shadow backdrop-blur-sm hover:bg-black/90"
+      >
+        Sources
       </Link>
 
       {selectedNodeId && <NodePanel noteId={selectedNodeId} onClose={() => setSelectedNodeId(null)} />}

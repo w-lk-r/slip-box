@@ -93,8 +93,11 @@ export class ApiStack extends Stack {
 
     apiFn.addToRolePolicy(
       new iam.PolicyStatement({
-        sid: 'ItemsRead',
-        actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:Scan'],
+        // UpdateItem added for POST/DELETE /items/{note_id}/review (mark/
+        // unmark reviewed, docs/frontend-ux-spec.md) — every other apiFn
+        // items action was read-only until this.
+        sid: 'ItemsReadWrite',
+        actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:Scan', 'dynamodb:UpdateItem'],
         resources: [
           'arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-items',
           'arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-items/index/recent-index',
@@ -104,8 +107,10 @@ export class ApiStack extends Stack {
     );
     apiFn.addToRolePolicy(
       new iam.PolicyStatement({
+        // Scan added for GET /sources (docs/frontend-ux-spec.md) — a plain
+        // listing of the whole (small) sources table.
         sid: 'SourcesRead',
-        actions: ['dynamodb:GetItem', 'dynamodb:Query'],
+        actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:Scan'],
         resources: [
           'arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-sources',
           'arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-sources/index/source-key-index',

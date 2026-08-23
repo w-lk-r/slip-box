@@ -43,6 +43,44 @@ export type ItemDetail = {
   date?: string;
   tags?: string[];
   created_at?: string;
+  reviewed_at?: string | null;
   body: string;
   connections: Record<string, string[]>;
+};
+
+// Mirrors app/api/routers/items.py's GET /items (list) response shape.
+export type ItemSummary = {
+  note_id: string;
+  type: ItemType;
+  title: string;
+  authored_by?: string;
+  date?: string;
+  tags?: string[];
+  created_at?: string;
+  reviewed_at?: string | null;
+};
+
+// Mirrors app/api/routers/items.py's GET /sources response shape.
+export type SourceListItem = Source & { retrieved_at?: string };
+
+// Mirrors GET /items/review-queue's per-note edge summaries.
+export type QueueOutgoingEdge = {
+  edge_id: string;
+  to_id: string;
+  to_title: string;
+  type: EdgeType;
+  confidence: number;
+};
+
+export type QueueIncomingEdge = {
+  edge_id: string;
+  from_id: string;
+  from_title: string;
+  type: EdgeType;
+  confidence: number;
+};
+
+export type ReviewQueueItem = ItemSummary & {
+  outgoing_edges: QueueOutgoingEdge[];
+  incoming_edges: QueueIncomingEdge[];
 };

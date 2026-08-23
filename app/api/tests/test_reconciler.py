@@ -133,6 +133,40 @@ class TestHandleUpsert:
         assert item["title"] == "Edited Title"
         assert item["created_at"] == first_created_at
 
+    def test_body_change_clears_reviewed_at(self, env, monkeypatch):
+        # docs/frontend-ux-spec.md's "Reviewed status" — a hand-edit
+        # invalidates a prior review, so a genuine body change must clear it.
+        monkeypatch.setattr(reconciler, "lambda_client", type("_", (), {"invoke": lambda self, **kw: None})())
+        reconciler.s3.put_object(Bucket=S3_BUCKET, Key="reviewed-note.md", Body=_note_md("reviewed-note").encode())
+        reconciler._handle_upsert(S3_BUCKET, "reviewed-note.md")
+        items_table.update_item(
+            Key={"note_id": "reviewed-note"},
+            UpdateExpression="SET reviewed_at = :r",
+            ExpressionAttributeValues={":r": "2026-08-22T00:00:00"},
+        )
+
+        reconciler.s3.put_object(
+            Bucket=S3_BUCKET, Key="reviewed-note.md", Body=_note_md("reviewed-note").encode().replace(b"Body text", b"Changed body")
+        )
+        reconciler._handle_upsert(S3_BUCKET, "reviewed-note.md")
+
+        assert "reviewed_at" not in items_table.get_item(Key={"note_id": "reviewed-note"})["Item"]
+
+    def test_frontmatter_only_change_preserves_reviewed_at(self, env, monkeypatch):
+        monkeypatch.setattr(reconciler, "lambda_client", type("_", (), {"invoke": lambda self, **kw: None})())
+        reconciler.s3.put_object(Bucket=S3_BUCKET, Key="reviewed-note-2.md", Body=_note_md("reviewed-note-2").encode())
+        reconciler._handle_upsert(S3_BUCKET, "reviewed-note-2.md")
+        items_table.update_item(
+            Key={"note_id": "reviewed-note-2"},
+            UpdateExpression="SET reviewed_at = :r",
+            ExpressionAttributeValues={":r": "2026-08-22T00:00:00"},
+        )
+
+        reconciler.s3.put_object(Bucket=S3_BUCKET, Key="reviewed-note-2.md", Body=_note_md("reviewed-note-2", tags=["new-tag"]).encode())
+        reconciler._handle_upsert(S3_BUCKET, "reviewed-note-2.md")
+
+        assert items_table.get_item(Key={"note_id": "reviewed-note-2"})["Item"]["reviewed_at"] == "2026-08-22T00:00:00"
+
     def test_rename_updates_same_row_not_a_duplicate(self, env):
         reconciler.s3.put_object(Bucket=S3_BUCKET, Key="old-name.md", Body=_note_md("my-note-abc123").encode())
         reconciler._handle_upsert(S3_BUCKET, "old-name.md")

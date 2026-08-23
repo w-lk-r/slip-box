@@ -119,10 +119,18 @@ def _handle_upsert(bucket: str, key: str) -> None:
         "gsi_pk": "item",
         "body_hash": body_hash,
     }
+    update_expression = "SET " + ", ".join(f"#{k} = :{k}" for k in values)
+    names = {f"#{k}": k for k in values}
+    # A hand-edited body invalidates any prior review — reviewed_at (review
+    # UX, docs/frontend-ux-spec.md) is deliberately absent, not null, when
+    # unreviewed, so clearing it back to "unreviewed" is a REMOVE, not a SET.
+    # Safe even if it was never set (REMOVE on a missing attribute is a no-op).
+    if body_changed:
+        update_expression += " REMOVE reviewed_at"
     items_table.update_item(
         Key={"note_id": note_id},
-        UpdateExpression="SET " + ", ".join(f"#{k} = :{k}" for k in values),
-        ExpressionAttributeNames={f"#{k}": k for k in values},
+        UpdateExpression=update_expression,
+        ExpressionAttributeNames=names,
         ExpressionAttributeValues={f":{k}": v for k, v in values.items()},
     )
     log.info(f"Reconciled {note_id} from {key}")
