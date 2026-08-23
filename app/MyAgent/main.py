@@ -31,8 +31,9 @@ For every note:
 - Give it a precise, descriptive title (this becomes the filename — be specific, not generic)
 - Write the body as ONE tight paragraph, roughly 3-6 sentences. Fold in why it matters and relevant context as part of stating the idea itself — don't tack them on as a separate paragraph. If the idea genuinely needs a second paragraph to stand on its own, that's a sign it's two ideas: split it into two notes instead of writing one long note.
 - Tag it with the key concepts it touches
-- Record the source URL if one was provided, via write_note's source_url param — and if the source material starts with a "Title:"/"Channel:" header (e.g. fetched YouTube content), pass those as source_title/source_author too rather than just repeating them in the note body
-- If ingesting an uploaded PDF, call read_pdf(pdf_key) first to read its content, then pass the same pdf_key to write_note's source_pdf_key param (not source_url) so the citation resolves correctly
+- Record the source URL if one was provided, via write_note's source_url param — and if the source material starts with a "Title:"/"Channel:" header (a client-fetched YouTube transcript sent as plain text), pass those as source_title/source_author too rather than just repeating them in the note body
+- If you called fetch_url yourself, it already returns title/author fields directly (for any URL type, not just YouTube) — pass those straight to write_note's source_title/source_author, don't parse them out of the text
+- If ingesting an uploaded PDF, call read_pdf(pdf_key) first to read its content, then pass the same pdf_key to write_note's source_pdf_key param (not source_url) so the citation resolves correctly. fetch_url does the same natively for a URL that points directly at a PDF — no separate read_pdf call needed in that case, just pass source_url as usual
 
 After writing notes, always search the knowledge base for related existing notes — there may already be things in the slip case that connect to what was just ingested.
 

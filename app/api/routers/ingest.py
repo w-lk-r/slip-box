@@ -13,15 +13,15 @@ def _mode_instruction(req: IngestRequest) -> str:
     if req.mode == "single":
         if req.topic:
             return (
-                f"Create exactly ONE atomic note from this source, focused specifically on: {req.topic}. "
-                "Ignore other ideas in the source that aren't about this topic. If the source doesn't "
-                "actually cover this topic — not even tangentially — don't force a note about it; say so "
-                "briefly instead and write nothing."
+                f"The user selected single-note mode for this ingestion, focused on the topic: {req.topic}. "
+                "Summarize the source into one atomic note about that topic specifically, skipping other "
+                "ideas in the source that aren't related to it. If the source doesn't cover this topic, "
+                "even tangentially, write nothing and briefly say why."
             )
         return (
-            "Create exactly ONE atomic note from this source. Pick the single most important or central "
-            "idea and write about only that one — do not create multiple notes even if the source touches "
-            "on several ideas."
+            "The user selected single-note mode for this ingestion. Summarize the source into one atomic "
+            "note focused on its single most important or central idea, rather than covering every idea "
+            "the source touches on."
         )
     if req.mode == "all":
         return "Extract ALL the distinct key ideas from this source and create one atomic note per idea."

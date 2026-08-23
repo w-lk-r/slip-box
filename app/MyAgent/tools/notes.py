@@ -570,14 +570,17 @@ def _youtube_video_id(url: str) -> str | None:
     return None
 
 
-def _fetch_youtube(video_id: str, original_url: str) -> str:
+def _fetch_youtube(video_id: str, original_url: str) -> dict:
     """
     Transcript (via youtube-transcript-api's timedtext endpoint, no API key
     needed) plus title/channel (via YouTube's oEmbed endpoint) — replaces
     fetch_url's default HTML-strip, which returns nothing usable against a
-    JS-rendered watch page.
+    JS-rendered watch page. Returns the same {title, author, text} shape
+    fetch_url does for every other content type — no more prepending a
+    "Title: X\\nChannel: Y" header into the text and hoping the caller
+    notices it.
     """
-    title, channel = None, None
+    title, channel = "", ""
     try:
         with httpx.Client(timeout=10) as client:
             resp = client.get(
@@ -586,11 +589,9 @@ def _fetch_youtube(video_id: str, original_url: str) -> str:
             )
             if resp.status_code == 200:
                 data = resp.json()
-                title, channel = data.get("title"), data.get("author_name")
+                title, channel = data.get("title") or "", data.get("author_name") or ""
     except httpx.HTTPError:
         pass
-
-    header = f"Title: {title}\nChannel: {channel}\n\n" if title else ""
 
     try:
         transcript = YouTubeTranscriptApi().fetch(video_id)
@@ -599,10 +600,33 @@ def _fetch_youtube(video_id: str, original_url: str) -> str:
         if not title:
             raise
         log.info(f"No YouTube transcript available for {video_id} ({type(e).__name__}: {e}), falling back to title/channel only")
-        return (header + "No transcript is available for this video — write the note from "
-                          "the title/channel alone if that's enough, or tell the user none was found.")[:FETCH_URL_MAX_CHARS]
+        text = ("No transcript is available for this video — write the note from "
+                "the title/channel alone if that's enough, or tell the user none was found.")
+        return {"title": title, "author": channel, "text": text[:FETCH_URL_MAX_CHARS]}
 
-    return (header + text)[:FETCH_URL_MAX_CHARS]
+    return {"title": title, "author": channel, "text": text[:FETCH_URL_MAX_CHARS]}
+
+
+_TITLE_RE = re.compile(r'<title[^>]*>(.*?)</title>', re.IGNORECASE | re.DOTALL)
+_AUTHOR_META_PATTERNS = (
+    re.compile(r'<meta[^>]+name=["\']author["\'][^>]+content=["\']([^"\']+)["\']', re.IGNORECASE),
+    re.compile(r'<meta[^>]+property=["\']article:author["\'][^>]+content=["\']([^"\']+)["\']', re.IGNORECASE),
+)
+
+
+def _extract_html_metadata(html: str) -> tuple[str, str]:
+    """Best-effort <title> and author extraction from an HTML page — not a
+    real HTML parser, just enough to stop citations being just a bare URL."""
+    title_match = _TITLE_RE.search(html)
+    title = re.sub(r'\s+', ' ', title_match.group(1)).strip() if title_match else ""
+
+    author = ""
+    for pattern in _AUTHOR_META_PATTERNS:
+        match = pattern.search(html)
+        if match:
+            author = match.group(1).strip()
+            break
+    return title, author
 
 
 @tool
@@ -639,20 +663,24 @@ def read_pdf(pdf_key: str) -> dict:
 
 
 @tool
-def fetch_url(url: str) -> str:
+def fetch_url(url: str) -> dict:
     """
-    Fetch the text content of a URL for ingestion.
-    Use this when the user provides a URL rather than pasting content directly.
-    YouTube URLs (youtube.com/watch, youtu.be, /shorts/, /embed/, /live/) are
-    detected automatically and return the video's transcript plus title/channel
-    instead of raw watch-page HTML, which is JS-rendered and not scrapeable.
+    Fetch a URL for ingestion. Branches by content type: a direct PDF link is
+    handed to you natively to read (like read_pdf, no separate extraction);
+    YouTube URLs (youtube.com/watch, youtu.be, /shorts/, /embed/, /live/)
+    return the video's transcript plus title/channel; anything else returns
+    extracted readable text plus title/author where the page provides them.
+
+    Pass title/author straight to write_note's source_title/source_author —
+    don't parse them back out of the text yourself.
 
     Args:
         url: The URL to fetch
 
     Returns:
-        Page text content (HTML tags stripped, capped at 50k characters), or a
-        YouTube transcript for video URLs
+        For a PDF, a document content block for you to read directly. For
+        everything else, a dict with title, author (both "" if unknown), and
+        text (page content or YouTube transcript, capped at 50k characters).
     """
     video_id = _youtube_video_id(url)
     if video_id:
@@ -661,6 +689,17 @@ def fetch_url(url: str) -> str:
     with httpx.Client(follow_redirects=True, timeout=30) as client:
         response = client.get(url, headers={"User-Agent": "SlipBox/1.0"})
         response.raise_for_status()
+
+        content_type = response.headers.get("content-type", "")
+        if "application/pdf" in content_type or url.lower().split("?")[0].endswith(".pdf"):
+            name = url.rsplit("/", 1)[-1].removesuffix(".pdf") or "document"
+            neutral_name = f"{name}-{uuid.uuid4().hex[:8]}"
+            return {
+                "status": "success",
+                "content": [{"document": {"name": neutral_name, "format": "pdf", "source": {"bytes": response.content}}}],
+            }
+
+        title, author = _extract_html_metadata(response.text)
         text = re.sub(r'<[^>]+>', ' ', response.text)
         text = re.sub(r'\s+', ' ', text).strip()
-        return text[:FETCH_URL_MAX_CHARS]
+        return {"title": title, "author": author, "text": text[:FETCH_URL_MAX_CHARS]}

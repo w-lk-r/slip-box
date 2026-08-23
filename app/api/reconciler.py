@@ -181,16 +181,26 @@ def _handle_delete(bucket: str, key: str) -> None:
     # gate as anything else.
     neighbor_ids = outgoing_targets | affected_from_ids
 
+    # Best-effort per neighbor — regenerate_note_links fetches that neighbor's
+    # own S3 file, which can itself be mid-deletion in the same batch (e.g.
+    # several connected notes removed together via aws s3 sync --delete).
+    # That must never block deleting *this* note's own DynamoDB row below:
+    # Stage 1's whole guarantee is that the items table matches S3, and one
+    # neighbor's regeneration failing is no reason to leave this note orphaned
+    # in DynamoDB after its S3 file is already gone.
     for from_id in affected_from_ids:
-        source = items_table.get_item(Key={"note_id": from_id}).get("Item")
-        if source and source.get("type") == "summary-card" and note_id in source.get("grounded_in", []):
-            grounded_in = [n for n in source["grounded_in"] if n != note_id]
-            items_table.update_item(
-                Key={"note_id": from_id},
-                UpdateExpression="SET grounded_in = :g",
-                ExpressionAttributeValues={":g": grounded_in},
-            )
-        regenerate_note_links(from_id)
+        try:
+            source = items_table.get_item(Key={"note_id": from_id}).get("Item")
+            if source and source.get("type") == "summary-card" and note_id in source.get("grounded_in", []):
+                grounded_in = [n for n in source["grounded_in"] if n != note_id]
+                items_table.update_item(
+                    Key={"note_id": from_id},
+                    UpdateExpression="SET grounded_in = :g",
+                    ExpressionAttributeValues={":g": grounded_in},
+                )
+            regenerate_note_links(from_id)
+        except Exception:
+            log.exception(f"Failed to regenerate links for neighbor {from_id} while deleting {note_id}, continuing")
 
     items_table.delete_item(Key={"note_id": note_id})
     log.info(f"Cleaned up deleted note {note_id} ({key}): {len(outgoing)} outgoing, {len(incoming)} incoming edges removed")

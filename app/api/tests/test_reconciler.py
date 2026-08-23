@@ -207,6 +207,25 @@ class TestHandleDelete:
     def test_no_matching_item_is_a_noop(self, env):
         reconciler._handle_delete(S3_BUCKET, "never-existed.md")  # must not raise
 
+    def test_neighbor_regeneration_failure_does_not_block_own_deletion(self, env):
+        # Real bug caught live: bulk-deleting several connected notes at once
+        # (e.g. aws s3 sync --delete) can hit a neighbor whose own S3 file is
+        # *also* already gone by the time regenerate_note_links fetches it.
+        # That used to raise unhandled and abort this whole handler before it
+        # reached items_table.delete_item — leaving note-a's row orphaned in
+        # DynamoDB even though its S3 file was gone. The neighbor's row still
+        # exists in items_table (so it's a genuine "affected_from_id"), but
+        # its S3 object does not.
+        self._seed_note("note-a", "note-a.md")
+        self._seed_note("note-b", "note-b.md")
+        edges_table.put_item(Item={"from_id": "note-b", "edge_id": "e1", "to_id": "note-a", "type": "RELATED_TO", "confidence": 1})
+        reconciler.s3.delete_object(Bucket=S3_BUCKET, Key="note-b.md")  # note-b's file already gone
+
+        reconciler._handle_delete(S3_BUCKET, "note-a.md")  # must not raise
+
+        assert items_table.get_item(Key={"note_id": "note-a"}).get("Item") is None
+        assert edges_table.query(KeyConditionExpression=Key("from_id").eq("note-b"))["Items"] == []
+
 
 class TestStage2Trigger:
     """

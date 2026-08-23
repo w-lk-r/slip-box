@@ -80,7 +80,7 @@ that's later hand-edited, but there's no update tool for `Item` notes at all
 (only `update_summary` exists for summary cards). The flag has nowhere to be
 set.
 
-## 6. `fetch_url` has no content-type handling — YouTube half RESOLVED 2026-08-21 (moved client-side)
+## 6. `fetch_url` has no content-type handling — RESOLVED 2026-08-22 (all three cases)
 
 First pass added YouTube handling straight to `fetch_url` (`_fetch_youtube` —
 `youtube-transcript-api` + oEmbed), which worked from a local dev machine but
@@ -121,32 +121,55 @@ No page-count/file-size cap yet — a large-enough PDF will hit Bedrock's own
 document-size limits and just fail; worth a simple upload-size guardrail
 before this is used on anything book-length.
 
+**`fetch_url`'s own remaining gap (a URL that points directly at a PDF, or
+a plain web page with no citation metadata) — RESOLVED 2026-08-22.**
+`fetch_url` now returns structured `{title, author, text}` for HTML pages
+(extracting `<title>` and an author meta/OG tag — previously nothing did
+this at all, a citation was always just the bare URL) and, for a URL whose
+`content-type` or extension says PDF, the same Bedrock document-block
+shape `read_pdf` already uses — `httpx` GET the bytes directly, no S3
+round-trip needed since there's no pre-staging step in the fetch-a-URL
+case. YouTube's existing transcript/oEmbed handling returns the same
+`{title, author, text}` shape now too, instead of prepending a literal
+`"Title: X\nChannel: Y"` header into the text and relying on the system
+prompt to notice it — removed that convention for anything going through
+`fetch_url` itself. It's still needed for one path: the Expo app's
+client-side YouTube fetch (`app/expo/src/lib/youtube.ts`) sends plain
+`text` with that same header baked in client-side, since there's no
+structured slot for title/author in the `text`+`source_url` ingest shape —
+the system prompt keeps both instructions side by side rather than
+regressing that path.
+
 ## 7. Research agent (`--research` fan-out) doesn't exist yet — design notes for when it's built
 
-**Concrete SDK answer confirmed 2026-08-22** (see `.claude/skills/strands-agents-sdk/SKILL.md`): Strands' `Graph`/`GraphBuilder` (`strands/multiagent/graph.py`) gives deterministic DAG execution with built-in budget controls — `set_max_node_executions`, `set_execution_timeout`, `set_node_timeout` — covering the "max search queries," "max sources fetched," and total-time caps sketched by hand below as a `ResearchBudget` object. Build against the real primitive instead of hand-rolling one.
+**Blocked on a real decision, not a technical gap**: web search needs a real provider (Tavily or Exa via `strands_tools`), and that means an actual API key — asked the user 2026-08-22, deferred ("not sure yet"). Everything below is ready to build the moment a provider is chosen; building the multi-node orchestration before then risks guessing the wrong shape.
+
+**Concrete SDK answer confirmed 2026-08-22** (see `.claude/skills/strands-agents-sdk/SKILL.md`): Strands' `Graph`/`GraphBuilder` (`strands/multiagent/graph.py`) gives deterministic DAG execution with built-in budget controls — `set_max_node_executions`, `set_execution_timeout`, `set_node_timeout`. **Correction, found 2026-08-22 while verifying the real API directly in the installed source (not assumed)**: these controls are *not* what caps "max search queries" or "max sources fetched" — they bound how many times a *node* re-executes and how long it's allowed to take, not how many times a tool gets called *within* one node's own turn. `add_node(executor: AgentBase | MultiAgentBase, ...)` also confirmed each node is a real `Agent` instance, not a plain function. So the per-tool caps below still need their own enforcement, independent of and complementary to `Graph`'s controls, not replaced by them — the original phrasing here conflated the two.
+
+**Recommended node shape**, now that the real API is confirmed: two `Agent` instances wired via `GraphBuilder` — a research node (system prompt scoped to search+fetch+cite; tools: the chosen provider's search tool, the now-hardened `fetch_url` — see #6, resolved 2026-08-22 — and `search_notes` to check the KB first) feeding into the existing ingestion agent's node for classification/writing, via `add_edge`.
 
 `CLAUDE.md` describes a `--research` path that fans out to a research agent
 before classification, but there's no research agent, no outward
-search/fetch tools beyond the ingestion `fetch_url`, and no budget
-enforcement. Notes for the build:
+search tool, and no budget enforcement. Notes for the build:
 
 **Tools needed**
-- Web search (Tavily or Exa via `strands_tools`), returning ranked snippets
-  so the agent reads before it fetches.
+- Web search (Tavily or Exa via `strands_tools`) — the one remaining
+  blocker, above.
 - `search_notes` first, always — check the KB before going outward so
   research doesn't re-fetch what's already grounding an existing note.
-- A hardened fetch replacing `fetch_url` (see #6): branch by content type
-  (readable-text extraction for HTML, PDF text extraction, YouTube
-  transcript), returning structured `{title, author, published_date, text}`
-  instead of a stripped blob — that structure is what feeds citations.
+- `fetch_url` — already hardened (see #6): branches by content type, PDF
+  read natively, structured `{title, author, text}` for everything else.
+  No further work needed here specifically for `--research`.
 - A citation/source-resolution tool that resolves or creates the canonical
-  `Source` record from fetched metadata (depends on #3).
+  `Source` record from fetched metadata — already exists (`_resolve_source`,
+  built for #3), reusable as-is.
 
-**Limiting expansion size**
-Don't rely on the system prompt to self-limit tool-call counts. Enforce a
-budget in code: a `ResearchBudget` object created per `--research`
+**Limiting expansion size — enforced inside the tools, not via `Graph`'s controls (see correction above)**
+Don't rely on the system prompt to self-limit tool-call counts, and don't
+rely on `Graph`'s node/timeout caps to do this either — they operate at
+the wrong granularity. A `ResearchBudget` object created per `--research`
 invocation, threaded through the search/fetch tools as shared state (same
-pattern as the session cache in `main.py`), hard-stopping on:
+closure pattern as the session cache in `main.py`), hard-stopping on:
 - max search queries per run (e.g. 3–5)
 - max sources fetched per run (e.g. 5–8), chosen from search snippets by
   relevance, not fetched blind
@@ -156,6 +179,11 @@ pattern as the session cache in `main.py`), hard-stopping on:
   handful of huge pages can't each spend the full per-source cap
 - max new notes written per research fan-out, same shape as the existing
   4+-notes-triggers-a-summary-card cap
+
+`Graph`'s `set_max_node_executions`/`set_execution_timeout`/`set_node_timeout`
+are still worth setting too — they're a real, complementary outer bound on
+the whole graph run (total wall-clock, runaway re-execution), just not a
+substitute for the per-tool caps above.
 
 Once a cap is hit, the tool should return a truncated/"budget exhausted"
 result rather than error, so the agent wraps up with what it has instead of
@@ -418,6 +446,8 @@ level is WARNING) — verification had to read DynamoDB directly instead of
 the logs that were supposed to show it; fixed with `log.setLevel(logging.INFO)`,
 matching the pattern `worker.py` already used.
 
+**Second real gap found 2026-08-23, this time during cleanup after the guardrail investigation below**: bulk-deleting 34 interconnected test notes from S3 at once left 10 of them stuck in DynamoDB — their `.md` files were gone from S3 but their `items` rows survived. Root cause: `_handle_delete`'s per-neighbor loop called `regenerate_note_links(from_id)` unguarded; when a neighbor's own S3 file was *also* mid-deletion in the same batch, that call raised an unhandled `AccessDenied` (S3's standard response for `GetObject` on a missing key when the caller lacks `ListBucket` — not a real permissions bug, just S3 declining to confirm non-existence) that propagated out of the handler *before* it reached `items_table.delete_item` for the note the event was actually about. A best-effort step (regenerating a neighbor's frontmatter) was able to block Stage 1's own unconditional guarantee for the note being deleted. Not just a theoretical scenario — this can happen for real whenever several connected notes get removed together (`aws s3 sync --delete` on a folder, or fast manual deletes of related notes in Obsidian). Fixed by wrapping the per-neighbor block in `try`/`except`, logging and continuing on failure rather than aborting — the neighbor's frontmatter staying stale until the next edge write touches it is an acceptable best-effort miss; the deleted note's own row staying orphaned in DynamoDB is not, since that's the exact drift Stage 1 exists to prevent. Regression test in `app/api/tests/test_reconciler.py::TestHandleDelete::test_neighbor_regeneration_failure_does_not_block_own_deletion`. The 10 stuck rows from before the fix were cleaned up by re-invoking the deployed `slip-box-reconciler` Lambda directly with synthetic `ObjectRemoved` events for each, after deploying the fix — confirmed all 10 (and their edges) gone afterward, and confirmed a real, non-test note that had an edge to one of the deleted test notes had its frontmatter correctly regenerated with no dangling reference.
+
 **Follow-on hardening, after Stage 1 is live: a staging bucket for `aws s3
 sync`, not a guardrail bolted onto Stage 1 itself.** Stage 1's fail-soft
 handling (log + skip on unparseable frontmatter) leaves real gaps once a
@@ -483,6 +513,8 @@ Deployed and verified against the live stack: pydantic validation (422s confirme
 Bedrock Guardrails (second bullet) now built — a `CfnGuardrail` (`agentcore/cdk/lib/app-stack.ts`) with the five standard content-harm filters plus `PROMPT_ATTACK` detection, wired into `app/MyAgent/model/load.py`'s `load_model()` via `BedrockModel`'s native `guardrail_id`/`guardrail_version` params — exactly the plug-in point this item named. Denied topics and PII/sensitive-info filtering deliberately not included (out of scope, need app-specific tuning — a real follow-on, not silently dropped).
 
 **Real false positive caught during live verification, not guessed at**: the first config (`PROMPT_ATTACK` at `HIGH`) blocked every `single`/`all`-mode ingest outright — including plainly benign agricultural text with zero security vocabulary. Root cause: it wasn't content-based at all — `_build_prompt`'s mode-instruction prefix ("Create exactly ONE atomic note from this source...") followed by pasted content is *structurally* identical to an injected-instruction pattern, which is exactly what `PROMPT_ATTACK` is trained to catch, regardless of what the pasted content actually says. `auto` mode (no instruction prefix) was unaffected — that isolated the cause. Lowered to `MEDIUM`, redeployed as a stable published version, re-verified: benign `single`/`all`-mode ingests succeed again, and a deliberate injection attempt ("SYSTEM OVERRIDE: ignore all previous instructions...") still gets blocked. Worth remembering if `_build_prompt`'s prefix pattern changes shape later — re-check this specific interaction, not just "does the guardrail still fire on attacks."
+
+**Follow-up, 2026-08-23: the `MEDIUM` fix above wasn't the whole story.** A `single`-mode ingest with a `url` source (not `text`) still got blocked — `finish_reason: "guardrail_intervened"` on the very first model turn, before any tool call. Confirmed via `bedrock-runtime apply-guardrail` run directly against the exact blocked prompt: `PROMPT_ATTACK` fired at `confidence: MEDIUM` against the `MEDIUM`-strength filter (Bedrock blocks when confidence ≥ strength), so this is a second, distinct trigger of the same underlying pattern — the imperative override phrasing ("Create exactly ONE atomic note... do not create multiple notes even if...") immediately followed by "Ingest this URL: https://..." reads as an even closer structural match to indirect prompt injection (imperative instruction + "go fetch this") than the `text`-based case that prompted the original `MEDIUM` fix. `mode: auto` (no instruction prefix) with the same URL was unaffected, confirming the prefix itself as the trigger again, not the URL alone. Fix this time was wording, not guardrail strength: reworded `_mode_instruction`'s `single`-mode branches (`app/api/routers/ingest.py`) from a "Create exactly ONE... do not create multiple..." command shape to a declarative "The user selected single-note mode... Summarize the source into one atomic note..." shape — tested directly against `apply-guardrail` before touching any deployed code, confirmed `action: NONE` for both the topic and no-topic variants. Deployed and re-verified live: both `single`-mode variants (with and without `topic`) now complete cleanly against the same Wikipedia URL that was previously blocked. Preferred this over raising `PROMPT_ATTACK` to `HIGH` — that would have papered over the false positive by also letting through genuinely higher-confidence attack patterns; rewording fixes the actual cause without loosening the security posture. Regression-covered in `app/api/tests/test_ingest_prompt.py` (pins the wording, can't exercise the guardrail itself — that stays a live-only check per this project's testing philosophy for LLM/classifier judgment).
 
 Once `/ingest` exists, arbitrary user-submitted URLs/text/PDFs flow straight
 into the agent's context, and `fetch_url` pulls in third-party web content

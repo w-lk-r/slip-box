@@ -6,17 +6,66 @@ structured Source model lived exactly here (dedup normalization,
 frontmatter scalar handling), and were expensive to catch via live
 deploy-and-verify when a local test would catch them in milliseconds.
 """
+import httpx
+import pytest
 from moto import mock_aws
 
 from tools.notes import (
+    _fetch_youtube,
     _normalize_source_key,
     _parse_frontmatter,
     _render_frontmatter,
     _resolve_source,
     _slugify,
     _youtube_video_id,
+    fetch_url,
     read_pdf,
 )
+
+
+class _FakeResponse:
+    def __init__(self, status_code=200, text="", content=b"", headers=None, json_data=None):
+        self.status_code = status_code
+        self.text = text
+        self.content = content or text.encode()
+        self.headers = headers or {}
+        self._json_data = json_data
+
+    def json(self):
+        return self._json_data
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(f"status {self.status_code}", request=None, response=self)
+
+
+class _FakeClient:
+    """Stands in for httpx.Client — routes .get(url) to a response keyed by
+    a substring match against the configured dict, so one fake can answer
+    both the oEmbed call and the main fetch in a single test."""
+
+    def __init__(self, responses):
+        self._responses = responses
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def get(self, url, **kwargs):
+        for key, response in self._responses.items():
+            if key in url:
+                return response
+        raise AssertionError(f"no fake response configured for {url}")
+
+
+@pytest.fixture
+def fake_httpx(monkeypatch):
+    def _install(responses):
+        monkeypatch.setattr("tools.notes.httpx.Client", lambda *a, **kw: _FakeClient(responses))
+
+    return _install
 
 
 def _create_sources_table():
@@ -270,3 +319,108 @@ class TestReadPdf:
         after = set(glob.glob("/tmp/*.pdf"))
 
         assert after == before
+
+
+class TestFetchUrl:
+    HTML_WITH_METADATA = """<html><head>
+        <title>How Caching Actually Works</title>
+        <meta name="author" content="Jane Doe">
+        </head><body><p>Cache invalidation is famously hard.</p></body></html>"""
+
+    HTML_NO_METADATA = "<html><body><p>Just some text, no title or author tags.</p></body></html>"
+
+    def test_html_page_extracts_title_and_author(self, fake_httpx):
+        fake_httpx({"example.com": _FakeResponse(text=self.HTML_WITH_METADATA, headers={"content-type": "text/html"})})
+        result = fetch_url("https://example.com/article")
+        assert result["title"] == "How Caching Actually Works"
+        assert result["author"] == "Jane Doe"
+        assert "Cache invalidation is famously hard" in result["text"]
+        assert "<p>" not in result["text"]
+
+    def test_html_page_with_no_metadata_returns_empty_strings_not_a_crash(self, fake_httpx):
+        fake_httpx({"example.com": _FakeResponse(text=self.HTML_NO_METADATA, headers={"content-type": "text/html"})})
+        result = fetch_url("https://example.com/no-metadata")
+        assert result["title"] == ""
+        assert result["author"] == ""
+        assert "Just some text" in result["text"]
+
+    def test_pdf_url_returns_document_content_block(self, fake_httpx):
+        pdf_bytes = b"%PDF-1.4 fake pdf bytes"
+        fake_httpx({"example.com": _FakeResponse(content=pdf_bytes, headers={"content-type": "application/pdf"})})
+        result = fetch_url("https://example.com/paper.pdf")
+        assert result["status"] == "success"
+        doc = result["content"][0]["document"]
+        assert doc["format"] == "pdf"
+        assert doc["source"]["bytes"] == pdf_bytes
+
+    def test_unreachable_url_raises(self, fake_httpx):
+        fake_httpx({"example.com": _FakeResponse(status_code=404)})
+        with pytest.raises(httpx.HTTPStatusError):
+            fetch_url("https://example.com/missing")
+
+    def test_youtube_url_routes_to_fetch_youtube(self, fake_httpx, monkeypatch):
+        monkeypatch.setattr("tools.notes._fetch_youtube", lambda video_id, url: {"title": "t", "author": "a", "text": "x"})
+        result = fetch_url("https://youtu.be/dQw4w9WgXcQ")
+        assert result == {"title": "t", "author": "a", "text": "x"}
+
+
+class TestFetchYoutube:
+    def test_returns_structured_title_author_text(self, fake_httpx):
+        fake_httpx({
+            "oembed": _FakeResponse(json_data={"title": "A Video", "author_name": "A Channel"}),
+        })
+
+        class _FakeTranscript:
+            def fetch(self, video_id):
+                return [type("Snippet", (), {"text": "hello"})(), type("Snippet", (), {"text": "world"})()]
+
+        import tools.notes as notes_module
+        original = notes_module.YouTubeTranscriptApi
+        notes_module.YouTubeTranscriptApi = lambda: _FakeTranscript()
+        try:
+            result = _fetch_youtube("dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ")
+        finally:
+            notes_module.YouTubeTranscriptApi = original
+
+        assert result == {"title": "A Video", "author": "A Channel", "text": "hello world"}
+
+    def test_no_transcript_falls_back_to_title_channel_only(self, fake_httpx):
+        from tools.notes import CouldNotRetrieveTranscript
+
+        fake_httpx({
+            "oembed": _FakeResponse(json_data={"title": "A Video", "author_name": "A Channel"}),
+        })
+
+        class _FakeTranscript:
+            def fetch(self, video_id):
+                raise CouldNotRetrieveTranscript(video_id)
+
+        import tools.notes as notes_module
+        original = notes_module.YouTubeTranscriptApi
+        notes_module.YouTubeTranscriptApi = lambda: _FakeTranscript()
+        try:
+            result = _fetch_youtube("dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ")
+        finally:
+            notes_module.YouTubeTranscriptApi = original
+
+        assert result["title"] == "A Video"
+        assert result["author"] == "A Channel"
+        assert "No transcript is available" in result["text"]
+
+    def test_no_transcript_and_no_title_reraises(self, fake_httpx):
+        from tools.notes import CouldNotRetrieveTranscript
+
+        fake_httpx({"oembed": _FakeResponse(status_code=404)})  # oEmbed fails too -> no title
+
+        class _FakeTranscript:
+            def fetch(self, video_id):
+                raise CouldNotRetrieveTranscript(video_id)
+
+        import tools.notes as notes_module
+        original = notes_module.YouTubeTranscriptApi
+        notes_module.YouTubeTranscriptApi = lambda: _FakeTranscript()
+        try:
+            with pytest.raises(CouldNotRetrieveTranscript):
+                _fetch_youtube("dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ")
+        finally:
+            notes_module.YouTubeTranscriptApi = original
