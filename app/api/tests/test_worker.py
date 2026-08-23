@@ -6,6 +6,8 @@ invoke_agent_runtime isn't moto-supported, so handler()'s success/error paths
 are exercised with that one call monkeypatched; the DynamoDB writes around it
 are real (against a moto-mocked table).
 """
+import json
+
 import boto3
 import pytest
 from moto import mock_aws
@@ -60,6 +62,46 @@ class TestHandler:
         assert result == {"session_id": "session-3", "status": "complete"}
         item = sessions_table.get_item(Key={"session_id": "session-3"})["Item"]
         assert item["status"] == "processing"  # handler itself never writes "complete" — the agent's hook does
+
+    def test_mode_is_forwarded_to_agent_payload_when_present(self, sessions_table, monkeypatch):
+        # review-todo #8: reconciler.py's Stage 2 trigger sets mode:
+        # "reclassify" so main.py routes to the standalone classification
+        # agent instead of the ingestion agent — worker.py must pass it
+        # through untouched.
+        class FakeStream:
+            def read(self):
+                return b'{"ok": true}'
+
+        calls = []
+
+        def fake_invoke(**kwargs):
+            calls.append(kwargs)
+            return {"response": FakeStream(), "contentType": "application/json"}
+
+        monkeypatch.setattr(worker.agentcore, "invoke_agent_runtime", fake_invoke)
+
+        worker.handler({"prompt": "reclassify this", "session_id": "session-5", "mode": "reclassify"}, None)
+
+        payload = json.loads(calls[0]["payload"])
+        assert payload == {"prompt": "reclassify this", "mode": "reclassify"}
+
+    def test_mode_omitted_when_not_present_on_event(self, sessions_table, monkeypatch):
+        class FakeStream:
+            def read(self):
+                return b'{"ok": true}'
+
+        calls = []
+
+        def fake_invoke(**kwargs):
+            calls.append(kwargs)
+            return {"response": FakeStream(), "contentType": "application/json"}
+
+        monkeypatch.setattr(worker.agentcore, "invoke_agent_runtime", fake_invoke)
+
+        worker.handler({"prompt": "hi", "session_id": "session-6"}, None)
+
+        payload = json.loads(calls[0]["payload"])
+        assert payload == {"prompt": "hi"}
 
     def test_invoke_failure_marks_error_and_reraises(self, sessions_table, monkeypatch):
         def _raise(**kwargs):

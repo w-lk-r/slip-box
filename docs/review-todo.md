@@ -205,7 +205,23 @@ to it the same way any directly-ingested note would —
 in `CLAUDE.md` (`Item → Source`) to keep "the user gave me this" distinct
 from "I went and found this."
 
-## 8. Multi-agent split shouldn't be a routing supervisor — dispatch by endpoint instead
+## 8. Multi-agent split shouldn't be a routing supervisor — dispatch by endpoint instead — RESOLVED 2026-08-23
+
+**Built and live-verified 2026-08-23.** New `app/MyAgent/classification.py`: a separate `Agent` ("classifier") whose only tools are `search_notes` and `write_edge` — it doesn't have `write_note`/`write_summary` at all, so "don't create notes, only score connections" is structural, not a prompt-level request. `write_edge` moved off the ingestion agent's tool list entirely; all edge-writing (same-source sibling connections *and* cross-corpus connections) now goes through it.
+
+Used both ways `Agent.as_tool()` is designed for:
+- **As a tool**: wrapped once at import time via `.as_tool(name="classify_relationships", preserve_context=False)` and added to the ingestion agent's tool list. After writing note(s), the ingestion agent calls it exactly once per source, passing a text description of every note it just wrote (id, title, one-line summary) — the classification agent checks those for same-source relationships itself, then calls `search_notes` on its own to find cross-corpus connections, then `write_edge`s anything genuine.
+- **Standalone**: `main.py`'s entrypoint gained an explicit `mode` field on the invoke payload — `"reclassify"` routes straight to a freshly-built classification agent instead of the ingestion agent, a real `if` in Python rather than the LLM parsing prompt text to decide its own behavior (applying this item's own stated principle — "shouldn't be an LLM router" — to Stage 2's dispatch, not just the ingest-endpoint dispatch this item originally scoped). `reconciler.py`'s `_trigger_stage2` (review-todo #9) sets `mode: "reclassify"` and dropped the old "do NOT call write_note or write_summary" prompt language entirely — no longer needed as a request since the classification agent structurally can't. `worker.py` forwards `mode` through untouched when present.
+
+`search_notes` deliberately stays on *both* agents — the classification agent uses it for connection-finding, the ingestion agent keeps its own separate call for summary-card cluster detection ("4+ notes converge → write_summary"), which stayed on the ingestion agent per `CLAUDE.md`'s four-agent table and is unrelated to edge-scoring. That's one extra KB query per ingest turn, an explicit accepted tradeoff for keeping the split clean rather than threading search results back out of the sub-agent call.
+
+`write_summary`/`update_summary`'s own `GROUNDED_IN` edges are unaffected — they already call the internal `_write_edge_record` helper directly, never the `@tool`-decorated `write_edge`, so removing `write_edge` from the ingestion agent's tools didn't touch that path. Confirmed via `grep` before building, not assumed.
+
+Live-verified both paths against the real deployed stack: a real multi-idea ingest (LRU/FIFO cache eviction) correctly called `classify_relationships` exactly once with all 3 new notes described together, which connected the two algorithm notes to each other (`RELATED_TO`, confidence 0.88), the synthesis note to both siblings (`EXTENDS`, 0.92–0.93), and — via its own `search_notes` call — found a genuine unrelated-topic connection to an existing corpus note (0.72 `RELATED_TO`, to a Zettelkasten-design note, an honestly low-but-real score, not forced). Separately, hand-editing a note's body directly in S3 correctly fired Stage 2 with `mode: reclassify`, confirmed via CloudWatch that this dispatched to the classification agent (not the ingestion agent — log line: "Invoking Slip Box classification agent (reclassification pass)..."), and it correctly declined to force any new connection since the genuinely related notes were already linked and the rest of the corpus wasn't actually about caching — `slip-box-ingest-sessions` recorded `notes_created: []` with real classification reasoning as `skipped_reason`, exactly matching the outcome-tracking shape Stage 2 already relied on before this change.
+
+Two real bugs caught and fixed along the way (unrelated to the SDK composition itself, but blocking verification of it):
+- `classification.py`'s module-level `Agent` construction called `load_model()` (reads `GUARDRAIL_ID`/`GUARDRAIL_VERSION` from `os.environ`) at import time, but `main.py` imports `classification` *before* its own `load_dotenv()` call runs — broke local dev. Fixed by having `classification.py` call `load_dotenv()` itself at its own top, matching `tools/notes.py`'s existing self-sufficient pattern (each module that reads env vars at import time loads its own `.env`, doesn't rely on import order elsewhere).
+- A pre-existing (though only 1-day-old, from this session's own `test_ingest_prompt.py`) test-isolation bug: `test_ingest_prompt.py` imported `routers.ingest` at module level, unmocked — since that transitively imports `clients.py`'s module-level boto3 objects, and Python caches module imports, this being the alphabetically-first unmocked import poisoned every other test file's own `mock_aws()`-wrapped import for the rest of the `uv run pytest` session (28 of 50 tests failing with real `UnrecognizedClientException` errors). An earlier `git stash` comparison this session had wrongly concluded this was pre-existing/unrelated — flawed, because `stash` without `-u` leaves untracked files in place, and `test_ingest_prompt.py` was untracked at the time, so it silently poisoned both sides of that comparison. Fixed by wrapping the import in `mock_aws()`, matching `test_ingest_status.py`'s existing pattern; found and fixed the same latent issue in `test_uploads.py` while at it, since it had the identical unmocked module-level `from main import app` pattern. `uv run pytest -q` (bare, no arguments) now passes cleanly end to end — 50/50, not just when the right files happen to be listed together.
 
 **Concrete SDK answer confirmed 2026-08-22** (see `.claude/skills/strands-agents-sdk/SKILL.md`): `Agent.as_tool(name=..., preserve_context=False)` (`strands/agent/_agent_as_tool.py`) wraps a classification `Agent` as a first-class tool the ingestion agent can call — `preserve_context=False` resets the wrapped agent's state per call, matching "score what I just found" with no cross-call bleed, and it's also callable standalone for the on-demand "what else is this connected to?" case. Fits the split described below directly; no custom wrapper needed.
 
@@ -241,6 +257,8 @@ cache) vs. actually separate AgentCore-hosted agents per flow (`agentcore
 add agent` per route — matches the "four separate Strands agents" framing
 literally, isolates blast radius/scaling/cost per flow, but means N cold
 starts and N deploy surfaces instead of one).
+
+**This deployment-shape question is still open — not resolved by the 2026-08-23 build above.** Both the ingestion and classification agents run inside the same shared AgentCore Runtime process/entrypoint today; the split built is a composition change (two `Agent` objects, `Agent.as_tool()` wiring, payload-level `mode` dispatch), not a change to how many Runtime resources are deployed. Worth revisiting once/if `--research` (`#7`) adds a third agent to the mix — three agents sharing one entrypoint is a different cost/blast-radius tradeoff than two.
 
 ## 9. DynamoDB has no reconciliation path for edits made directly in S3/KB — Stage 1 + Stage 2 RESOLVED 2026-08-22, staging bucket still open
 
@@ -551,16 +569,17 @@ burn Bedrock spend or spam the KB with junk.
 
 ---
 
-*Recommended order, updated 2026-08-22: #1, #2, #3, #6, #9 (Stage 1 + Stage
-2), and #11 are all resolved; the note-created-entirely-outside-the-system
-case (missing `note_id`/sidecar, no linkages — previously its own item)
-was folded into #9 and shipped with it, not tracked separately anymore.
-Still open under #9: the `aws s3 sync` staging bucket — non-blocking
-hardening, not required for the core guarantee. #10 is downstream of #9 —
-don't start it first. #7 (`--research` fan-out) and #8 (classification
-split, a structural decision worth settling before #7) are the two big
-remaining feature items. #4–#5 are independent metadata/provenance polish,
-no dependency on anything above.*
+*Recommended order, updated 2026-08-23: #1, #2, #3, #6, #8, #9 (Stage 1 +
+Stage 2), and #11 are all resolved; the note-created-entirely-outside-the-
+system case (missing `note_id`/sidecar, no linkages — previously its own
+item) was folded into #9 and shipped with it, not tracked separately
+anymore. Still open under #9: the `aws s3 sync` staging bucket — non-
+blocking hardening, not required for the core guarantee. #10 is downstream
+of #9 — don't start it first. #7 (`--research` fan-out) is the one big
+remaining feature item, still blocked on the deferred search-provider
+choice (Tavily/Exa) — #8's classification agent is built and ready for the
+research node to hand off to once that's picked. #4–#5 are independent
+metadata/provenance polish, no dependency on anything above.*
 
 ## 13. Agent session-caching machinery is currently inert — needs a decision, not urgent
 

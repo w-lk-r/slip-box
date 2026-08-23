@@ -140,16 +140,15 @@ def _trigger_stage2(reason: str) -> None:
         log.info("WORKER_FUNCTION_NAME not set, skipping Stage 2 trigger")
         return
     session_id = f"session-{uuid.uuid4()}"
-    prompt = (
-        "This is a reclassification pass, not new ingestion — do NOT call "
-        "write_note or write_summary. " + reason + " Search the knowledge "
-        "base for related notes and call write_edge for any genuine new "
-        "connections. Existing connections don't need to be re-added."
-    )
+    # mode: "reclassify" routes this straight to the standalone classification
+    # agent (main.py, review-todo #8) instead of the ingestion agent — a
+    # structural guarantee it won't call write_note/write_summary, since it
+    # has no such tools, rather than a prompt asking it not to.
+    prompt = reason + " Existing connections don't need to be re-added."
     lambda_client.invoke(
         FunctionName=WORKER_FUNCTION_NAME,
         InvocationType="Event",
-        Payload=json.dumps({"prompt": prompt, "session_id": session_id}).encode(),
+        Payload=json.dumps({"prompt": prompt, "session_id": session_id, "mode": "reclassify"}).encode(),
     )
     log.info(f"Triggered Stage 2 (session {session_id}): {reason}")
 

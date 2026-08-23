@@ -66,6 +66,14 @@ Read-only shareable links to a subgraph — e.g. share the cluster of notes arou
 
 ---
 
+## Luhmann-style keyword index cards
+
+Raised 2026-08-22, not yet scoped or shaped. Luhmann's actual Zettelkasten had a second, separate card index alongside the numbered slip-box itself: a keyword index (`Schlagwortkatalog`) where each keyword card pointed to just one or two *entry-point* note numbers, not an exhaustive list of every note touching that topic — the idea was to jump into the graph at a good starting point and follow connections from there, not get a flat search-result list.
+
+This project's current retrieval primitives don't quite cover that: `tags` frontmatter + KB semantic search (`search_notes`) both give exhaustive/fuzzy retrieval across everything matching, and MOCs (a `PermanentNote` curating `RELATED_TO` links, see `CLAUDE.md`'s Note taxonomy section) are close in spirit but user-authored and note-shaped, not a lightweight keyword→entry-point lookup. Worth thinking about whether a real "index card" primitive earns its place once the graph gets large enough that flat search/tag results stop being the best way in — or whether MOCs already do this job well enough once there are enough of them. No design decision made yet; flagging so the idea doesn't get lost.
+
+---
+
 ## Real ingest-completion tracking — RESOLVED 2026-08-22
 
 Built as designed below, using Strands lifecycle hooks instead of log-scraping to get the structured outcome: a `slip-box-ingest-sessions` DynamoDB table (`session_id`, `status: processing|complete|error`, `notes_created`, `skipped_reason`, `error`, TTL-expired after 7 days), seeded `processing` by `WorkerFunction` before it calls `invoke_agent_runtime`, finalized by the agent's own `IngestOutcomeTracker` hook (`app/MyAgent/hooks.py`, subscribes `AfterToolCallEvent`/`AfterInvocationEvent`) when the turn ends — no log parsing anywhere in the path. Exposed via `GET /ingest/{session_id}` (treats a not-yet-seeded record as `processing`, not 404, since the Worker invocation is async). `app/expo/src/lib/pendingIngestions.ts` polls this instead of guessing on a timer; `share.tsx` surfaces the real outcome (which note(s) got created, or why none did) once polling resolves.

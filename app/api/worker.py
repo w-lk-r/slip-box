@@ -57,12 +57,16 @@ def handler(event, context):
 
     _seed_processing(session_id)
 
+    agent_payload = {"prompt": prompt}
+    if "mode" in event:
+        agent_payload["mode"] = event["mode"]
+
     log.info(f"Invoking agent for session {session_id}")
     try:
         response = agentcore.invoke_agent_runtime(
             agentRuntimeArn=AGENT_RUNTIME_ARN,
             runtimeSessionId=session_id,
-            payload=json.dumps({"prompt": prompt}).encode(),
+            payload=json.dumps(agent_payload).encode(),
         )
     except Exception as e:
         log.exception(f"Agent invocation failed for session {session_id}")

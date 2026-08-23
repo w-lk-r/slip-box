@@ -13,9 +13,20 @@ that the rewording below clears the same filter (action: NONE) without
 loosening the guardrail's strength. These tests just pin the wording so it
 doesn't drift back toward the flagged pattern; they can't exercise the
 guardrail itself.
+
+_build_prompt/_mode_instruction are pure functions, but importing
+routers.ingest at all transitively imports clients.py, which constructs real
+boto3 objects at module level — real bug caught live: doing that unmocked
+at collection time (before any fixture runs) made this the first, unmocked
+import of the shared clients.py module in the whole test session, breaking
+every other test file's own mock_aws()-wrapped import later. Matches the
+same pattern test_ingest_status.py's fixture and test_uploads.py already use.
 """
-from models import IngestRequest
-from routers.ingest import _build_prompt, _mode_instruction
+from moto import mock_aws
+
+with mock_aws():
+    from models import IngestRequest
+    from routers.ingest import _build_prompt, _mode_instruction
 
 
 def _req(**kwargs):

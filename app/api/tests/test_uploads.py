@@ -1,11 +1,23 @@
 """
 FastAPI TestClient test for POST /uploads/presign, per CLAUDE.md's guidance
 for a request/response shape change. generate_presigned_url is a local SigV4
-signing operation with no live AWS call, so this needs no moto mocking.
+signing operation with no live AWS call, so this module needs no moto
+mocking of its own — but `from main import app` still has to happen inside
+a mock_aws() context (real bug caught live: pytest executes this module's
+top-level code at collection time, before any test or fixture runs, so an
+unmocked import here was the *first* import of the shared clients.py module
+in the whole test session — and since Python caches modules, every later
+test file's own `with mock_aws(): from main import app` pattern silently
+got clients.py's boto3 objects already bound outside any mock, breaking
+every test file that ran after this one alphabetically). Matches the same
+"imported inside mock_aws so clients.py's ddb.Table() binds to the mock"
+pattern test_ingest_status.py's fixture already uses.
 """
 from fastapi.testclient import TestClient
+from moto import mock_aws
 
-from main import app
+with mock_aws():
+    from main import app
 
 client = TestClient(app)
 

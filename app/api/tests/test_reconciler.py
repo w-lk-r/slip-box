@@ -251,7 +251,10 @@ class TestStage2Trigger:
 
         assert len(calls) == 1
         payload = json.loads(calls[0]["Payload"])
-        assert "do NOT call write_note" in payload["prompt"]
+        # review-todo #8: mode "reclassify" routes to the standalone
+        # classification agent, which structurally has no write_note tool —
+        # a real guarantee rather than an in-prompt request.
+        assert payload["mode"] == "reclassify"
         assert "Edit Note" in payload["prompt"]
         assert calls[0]["FunctionName"] == "test-worker"
         assert calls[0]["InvocationType"] == "Event"
