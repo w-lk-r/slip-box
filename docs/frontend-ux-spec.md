@@ -92,6 +92,10 @@ A second, related but distinct queue: not "what needs a decision," but "show me 
 
 Mobile-first reading ritual: open a note, see its typed edges as a small deck beneath it, tap to jump; a breadcrumb rail records the path. A shuffle mode for serendipity. On Expo specifically, swipe right follows the strongest/most recent edge with no menu at all. Full detail, including the reasoning for mobile-first vs. web, is in the brainstorm artifact — worth returning to once Review has shipped and been used for a while, since the edge-walking data model this needs is the same one Review already touches.
 
+**Design note (2026-08-23):** the stack should default to centering on the note the user actually opened — that note is "home base," with its connections presented as branching *outward* from it (central idea out), not the reverse. Landing on some peripheral connected note first and making the user navigate back inward to find their bearings would undercut the whole point of a "follow a thread from here" interaction. Worth keeping in mind for the breadcrumb rail's design too: the anchor note should always be one tap away, not buried at the start of a long trail.
+
+Also not yet built in Expo at all today, worth noting for scoping when this is picked up: `note/[noteId].tsx`'s existing connections list (`app/expo/src/app/note/[noteId].tsx`) is flat, grouped by edge type, and not tappable — no navigation, no deck, no swipe. `recent.tsx`'s existing grouping is by date only (Today/Yesterday/older), unrelated to and predating this brainstorm's source/fan-out/topic groupings, which currently exist only on web (`/review`, `/sources`).
+
 ## Laying cards out *(design-level — not this pass)*
 
 Web composition ritual: a freeform drag-and-drop "desk," deliberately not force-directed, that folds into the existing selection-first `PermanentNote` writing flow rather than sitting beside it as a second panel. Savable as a MOC that remembers roughly how notes were arranged, not just which ones were linked. Highest build cost of the four ideas in the original brainstorm — a genuinely new interaction model, not a new view on existing data.
