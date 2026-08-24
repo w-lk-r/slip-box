@@ -8,10 +8,10 @@ Four rituals from the physical method, translated into what a phone and a browse
 
 | Ritual | Surface | Status |
 |---|---|---|
-| **Review** — what needs a decision this week | Web (queue UI) | **Spec'd below, building now** |
-| **Flipping** — pull a card, follow where it points | Mobile-first (Expo) | Design-level only, see brainstorm artifact |
+| **Review** — what needs a decision this week | Web (queue UI) + Expo (source-grouped stacks) | **Built** |
+| **Flipping** — pull a card, follow where it points | Expo | **Built** — `note/[noteId].tsx` |
 | **Laying cards out** — arrange a desk before writing | Web (spatial canvas) | Design-level only, see brainstorm artifact |
-| **Index cards** — sparse, curated entry points | Both | Design-level only, see brainstorm artifact |
+| **Index cards** — sparse, curated entry points | Expo (mobile-first, matching Review/Flipping) | **Built** — see below |
 
 ---
 
@@ -80,6 +80,7 @@ A second, related but distinct queue: not "what needs a decision," but "show me 
 - `app/review/page.tsx` — flat list of `ReviewQueueCard`s (no tabs in v1; see Open Questions). Each card: `NoteCard`-style summary, edge chips color-matched to `GraphView.tsx`'s `EDGE_COLORS`, click a chip to open `EdgePanel`, "Mark reviewed" button removes the card from the local list on success (`EdgePanel`'s existing `onChanged` callback pattern, not a full reload).
 - `app/sources/page.tsx` → `app/sources/[sourceId]/page.tsx` — list of sources, click into one for its notes via `NoteCard`.
 - Nav: two more corner-pinned links in `GraphView.tsx`, same pattern as the existing "Upload PDFs" link (`fixed bottom-4 right-4`), not a new nav paradigm.
+- **Mobile (built 2026-08-23, `app/expo/`):** grouped by source into swipeable stacks (`review-stack.tsx`) rather than a flat list — the natural mobile review unit turned out to be "everything that just came in from one place," not one card at a time; see `docs/build-log.md`. Each note in a stack is actionable inline without leaving the flow: **Tag** (opens the Index Cards modal), **Delete** (native destructive confirm, then optimistic local removal — the real cleanup is async via `reconciler.py`), **Mark reviewed** — a three-action row replacing the original single button once those two were added.
 
 ### Open questions (deliberately not decided yet)
 
@@ -100,6 +101,18 @@ Also not yet built in Expo at all today, worth noting for scoping when this is p
 
 Web composition ritual: a freeform drag-and-drop "desk," deliberately not force-directed, that folds into the existing selection-first `PermanentNote` writing flow rather than sitting beside it as a second panel. Savable as a MOC that remembers roughly how notes were arranged, not just which ones were linked. Highest build cost of the four ideas in the original brainstorm — a genuinely new interaction model, not a new view on existing data.
 
-## Index cards *(design-level — not this pass)*
+## Index cards *(built, 2026-08-23)*
 
-The second, deliberately sparse index Luhmann kept alongside the numbered slips — a keyword pointing at one or two *entry* notes, not an exhaustive list. Distinct from tags (automatic, exhaustive) by design. Proposed to double as both the app's actual "how do I get in today" home screen and a way to make review bounded ("does this note deserve to become an entry point?") rather than open-ended. Needs one new, small primitive (keyword → entry note_ids) — not a big one, but a genuinely new one, unlike Review above which needed none.
+The second, deliberately sparse index Luhmann kept alongside the numbered slips — a keyword pointing at one or two *entry* notes, not an exhaustive list. Distinct from tags (automatic, exhaustive) by design.
+
+**Data model:** `index_keywords: list[str]`, a sparse attribute on `items` rows (absent, not `[]`, when a note isn't a curated entry point for anything) — same shape as `tags` and the `reviewed_at` sparse-attribute precedent above. No new table or GSI; `docs/schema-change-checklist.md`'s process doesn't apply, the same deliberate scope call the Reviewed status section above already made for the same reason. Not cleared on hand-edit (unlike `reviewed_at`) — a body edit doesn't unmake a note's curated role as an entry point.
+
+**Backend** (`app/api/routers/items.py`): `GET /index` (scans for `index_keywords` existence, groups into `{keyword, notes}[]`, sorted alphabetically — the index is a filed, curated structure, not a chronological feed); `POST`/`DELETE /items/{note_id}/index-keywords[/{keyword}]`. `_edges_for_note` also now resolves each neighbor's own `index_keywords`, attached to every edge as `to_index_keywords`/`from_index_keywords`.
+
+**Ordering resolved:** alphabetical by keyword, not by date — a real design tension surfaced mid-build ("I don't like ordered by date... although maybe newest is still useful") resolved by separating the two needs rather than picking one: recency already lives on the Slip Box tab's "Recent" box (renamed from "All," unchanged behavior — freshly written, not yet filed, "not quite yet putting the cards back in the slip case"); the Index itself stays purely alphabetical, the filed/curated structure.
+
+**"Sub index cards":** also requested mid-build. Luhmann's own index was flat — hierarchy emerged from *following links out of the entry note*, not a tree inside the index. Translated literally rather than building a nested-keyword structure: on the note detail screen, any connection that is itself a curated entry point for some other keyword shows a small "↳ index: keyword" marker, sourced from the same `to_index_keywords`/`from_index_keywords` edge data above — no new hierarchy concept, discovered by walking edges you can already walk.
+
+**Expo UI:** `app/(tabs)/index.tsx`'s box switcher gains "Index" as the new first/default box (the old "All" default was always a placeholder until this existed — see the design note this replaced). `components/index-card-row.tsx` renders each keyword; a single entry note navigates straight there, 2-3 entries expand inline (accordion) — no new screen needed given the "1-3" cap. Curation happens from `note/[noteId].tsx`: a header-right tag icon opens `app/index-keyword.tsx` (modal, matching the existing `settings`/`share` pattern), which offers existing keywords as tappable suggestions before a free-text field, to discourage near-duplicate fragmentation ("Sleep" vs "sleep quality"). Existing keywords on a note show as removable pills inline. No hard cap enforced server-side — the "1-3" norm is UI copy only, matching this being a personal, self-curated tool.
+
+**Out of scope:** web UI (mobile-first, matching Review/Flipping before it); cleanup of `index_keywords` on note deletion (no `DELETE /items/{note_id}` endpoint exists yet at all, so nothing to wire up — flagged for whenever note deletion is built).

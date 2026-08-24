@@ -12,18 +12,27 @@ export type ShareIntentLike = {
 
 /**
  * Maps expo-share-intent's { text, webUrl, ... } shape to what POST /ingest
- * expects: exactly one of {url} or {text}.
+ * expects: exactly one of {url} or {text} (+ optional source_url).
  */
 export function toIngestPayload(shareIntent: ShareIntentLike): IngestPayload | null {
+  const text = shareIntent.text?.trim();
+
+  // Real text content beats webUrl, not the other way around — some apps
+  // (Kindle sharing a highlight) attach both the quote AND a link back to
+  // the source in the same share. The quote is the actual content to
+  // ingest; the link is a citation for it, not a substitute — same
+  // source_url mechanism already used for a client-fetched YouTube
+  // transcript. Previously webUrl was checked first, which silently
+  // discarded the quote and ingested just the book's product-page link.
+  if (text && !URL_PATTERN.test(text)) {
+    return shareIntent.webUrl ? { text, source_url: shareIntent.webUrl } : { text };
+  }
   if (shareIntent.webUrl) {
     return { url: shareIntent.webUrl };
   }
-  const text = shareIntent.text?.trim();
-  if (!text) {
-    return null;
-  }
-  if (URL_PATTERN.test(text)) {
+  if (text) {
+    // text itself was a bare URL (e.g. a link shared as a Message).
     return { url: text };
   }
-  return { text };
+  return null;
 }

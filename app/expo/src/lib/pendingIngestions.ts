@@ -3,7 +3,14 @@
 // ingest-completion tracking". Replaces the old client-only timeout guess.
 import { getIngestStatus } from './api';
 
-export type PendingIngestion = { sessionId: string; startedAt: number };
+export type PendingIngestion = {
+  sessionId: string;
+  startedAt: number;
+  // Defaults to the ingest-specific copy in index.tsx's PendingRow when
+  // absent — set explicitly for a differently-worded in-flight job, e.g. an
+  // on-demand summarize request, which shares this exact polling mechanism.
+  label?: string;
+};
 
 const POLL_INTERVAL_MS = 3000;
 // Safety fallback only — stops polling a session forever if the status
@@ -58,8 +65,8 @@ function schedulePoll() {
   pollTimer = setInterval(pollOnce, POLL_INTERVAL_MS);
 }
 
-export function addPendingIngestion(sessionId: string): void {
-  pending = [...pending, { sessionId, startedAt: Date.now() }];
+export function addPendingIngestion(sessionId: string, label?: string): void {
+  pending = [...pending, { sessionId, startedAt: Date.now(), label }];
   notify();
   schedulePoll();
 }

@@ -136,7 +136,11 @@ export class ApiStack extends Stack {
     apiFn.addToRolePolicy(
       new iam.PolicyStatement({
         sid: 'NotesFrontmatterRegen',
-        actions: ['s3:GetObject', 's3:PutObject'],
+        // DeleteObject backs DELETE /items/{note_id} — it only removes the
+        // S3 object(s); the reconciler's own S3-event-triggered DeleteItem
+        // grant (ItemsReadWrite, above) is what actually cleans up
+        // DynamoDB, so this Lambda never needs dynamodb:DeleteItem itself.
+        actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
         resources: ['arn:aws:s3:::slip-box-notes/*'],
       })
     );

@@ -114,6 +114,7 @@ export type Item = {
   date?: string;
   tags?: string[];
   created_at?: string;
+  source_id?: string;
 };
 
 export type ListItemsResult =
@@ -125,9 +126,11 @@ export type ListItemsResult =
  * cursor, not a chronological offset — the caller accumulates pages and
  * sorts client-side rather than assuming each page is itself in date order).
  */
-export async function listItems(limit = 20, cursor?: string): Promise<ListItemsResult> {
-  const query = cursor ? `?limit=${limit}&cursor=${encodeURIComponent(cursor)}` : `?limit=${limit}`;
-  const result = await apiFetch<{ items: Item[]; cursor?: string }>(`/items${query}`);
+export async function listItems(limit = 20, cursor?: string, type?: ItemType): Promise<ListItemsResult> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (cursor) params.set('cursor', cursor);
+  if (type) params.set('type', type);
+  const result = await apiFetch<{ items: Item[]; cursor?: string }>(`/items?${params}`);
   if (!result.ok) return result;
   return { ok: true, items: result.data.items, cursor: result.data.cursor };
 }
@@ -140,10 +143,46 @@ export type Source = {
   author: string | null;
 };
 
+export type ListSourcesResult = { ok: true; sources: Source[] } | { ok: false; error: string };
+
+export async function listSources(): Promise<ListSourcesResult> {
+  const result = await apiFetch<{ sources: Source[] }>('/sources');
+  if (!result.ok) return result;
+  return { ok: true, sources: result.data.sources };
+}
+
+export type EdgeType = 'SUPPORTS' | 'CONTRADICTS' | 'EXTENDS' | 'RELATED_TO' | 'GROUNDED_IN';
+
+export type OutgoingEdge = {
+  edge_id: string;
+  to_id: string;
+  to_title: string;
+  // Non-empty when the neighbor is itself a curated index entry — the "sub
+  // index card" signal (docs/frontend-ux-spec.md's Index Cards section):
+  // discovered by walking edges from an entry note, not a separate screen.
+  to_index_keywords: string[];
+  type: EdgeType;
+  confidence: number;
+};
+
+export type IncomingEdge = {
+  edge_id: string;
+  from_id: string;
+  from_title: string;
+  from_index_keywords: string[];
+  type: EdgeType;
+  confidence: number;
+};
+
 export type ItemDetail = Item & {
   source: Source | null;
   body: string;
   connections: Record<string, string[]>;
+  outgoing_edges: OutgoingEdge[];
+  incoming_edges: IncomingEdge[];
+  // Absent (not []) when this note isn't a curated entry point for anything —
+  // sparse, matching the backend's own DynamoDB convention.
+  index_keywords?: string[];
 };
 
 export type GetItemResult =
@@ -154,4 +193,97 @@ export async function getItem(noteId: string): Promise<GetItemResult> {
   const result = await apiFetch<ItemDetail>(`/items/${encodeURIComponent(noteId)}`);
   if (!result.ok) return result;
   return { ok: true, item: result.data };
+}
+
+export type ReviewQueueItem = Item & {
+  outgoing_edges: OutgoingEdge[];
+  incoming_edges: IncomingEdge[];
+};
+
+export type GetReviewQueueResult =
+  | { ok: true; items: ReviewQueueItem[] }
+  | { ok: false; error: string };
+
+export async function getReviewQueue(): Promise<GetReviewQueueResult> {
+  const result = await apiFetch<{ items: ReviewQueueItem[] }>('/items/review-queue');
+  if (!result.ok) return result;
+  return { ok: true, items: result.data.items };
+}
+
+export type MarkReviewedResult = { ok: true } | { ok: false; error: string };
+
+export async function markReviewed(noteId: string): Promise<MarkReviewedResult> {
+  const result = await apiFetch(`/items/${encodeURIComponent(noteId)}/review`, { method: 'POST' });
+  if (!result.ok) return result;
+  return { ok: true };
+}
+
+export type DeleteItemResult = { ok: true } | { ok: false; error: string };
+
+// Only removes the S3 object(s) server-side — the actual DynamoDB cascade
+// (edges, summary-card membership) happens asynchronously via the
+// reconciler once it sees the S3 delete event, so this note may briefly
+// still resolve via getItem right after this resolves. Callers should
+// remove it from local state optimistically rather than waiting to poll.
+export async function deleteItem(noteId: string): Promise<DeleteItemResult> {
+  const result = await apiFetch(`/items/${encodeURIComponent(noteId)}`, { method: 'DELETE' });
+  if (!result.ok) return result;
+  return { ok: true };
+}
+
+// A keyword pointing at its 1-3 curated entry notes — Luhmann's second,
+// deliberately sparse index alongside the numbered slips. Distinct from tags
+// (automatic, exhaustive) by design. See docs/frontend-ux-spec.md's Index
+// Cards section.
+export type IndexEntry = {
+  keyword: string;
+  notes: Pick<Item, 'note_id' | 'title' | 'type'>[];
+};
+
+export type GetIndexResult = { ok: true; entries: IndexEntry[] } | { ok: false; error: string };
+
+// Backend returns entries pre-sorted alphabetically by keyword — the index
+// is a filed, curated structure, not a chronological feed like the Recent
+// box (see (tabs)/index.tsx's own comment on why "newest" doesn't apply here).
+export async function getIndex(): Promise<GetIndexResult> {
+  const result = await apiFetch<{ entries: IndexEntry[] }>('/index');
+  if (!result.ok) return result;
+  return { ok: true, entries: result.data.entries };
+}
+
+export type IndexKeywordResult =
+  | { ok: true; indexKeywords: string[] }
+  | { ok: false; error: string };
+
+export async function addIndexKeyword(noteId: string, keyword: string): Promise<IndexKeywordResult> {
+  const result = await apiFetch<{ index_keywords?: string[] }>(`/items/${encodeURIComponent(noteId)}/index-keywords`, {
+    method: 'POST',
+    body: JSON.stringify({ keyword }),
+  });
+  if (!result.ok) return result;
+  return { ok: true, indexKeywords: result.data.index_keywords ?? [] };
+}
+
+// Multi-select trigger for an on-demand summary card, grounded in exactly
+// the user-picked note_ids (docs — the selection-first pattern CLAUDE.md
+// already describes for PermanentNote writing, applied here to synthesis).
+// Reuses the exact same async-invoke-and-poll shape as ingest(): a
+// session_id to feed into addPendingIngestion/getIngestStatus, nothing new
+// on the polling side.
+export async function summarize(noteIds: string[]): Promise<IngestResult> {
+  const result = await apiFetch<{ session_id: string }>('/summarize', {
+    method: 'POST',
+    body: JSON.stringify({ note_ids: noteIds }),
+  });
+  if (!result.ok) return result;
+  return { ok: true, sessionId: result.data.session_id };
+}
+
+export async function removeIndexKeyword(noteId: string, keyword: string): Promise<IndexKeywordResult> {
+  const result = await apiFetch<{ index_keywords?: string[] }>(
+    `/items/${encodeURIComponent(noteId)}/index-keywords/${encodeURIComponent(keyword)}`,
+    { method: 'DELETE' }
+  );
+  if (!result.ok) return result;
+  return { ok: true, indexKeywords: result.data.index_keywords ?? [] };
 }

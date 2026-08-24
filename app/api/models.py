@@ -97,3 +97,14 @@ class EdgePatch(BaseModel):
         if self.type is None and self.confidence is None:
             raise ValueError("provide at least one of type or confidence to update")
         return self
+
+
+class IndexKeywordRequest(BaseModel):
+    keyword: str = Field(..., min_length=1, max_length=100)
+
+
+class SummarizeRequest(BaseModel):
+    # min 2: a "summary" of one note isn't a synthesis (CLAUDE.md's
+    # SummaryCard is cluster-synthesis, not a single-note rollup). max 20 is
+    # a pragmatic sanity cap, same shape as PresignRequest's max_length=50.
+    note_ids: list[str] = Field(..., min_length=2, max_length=20)

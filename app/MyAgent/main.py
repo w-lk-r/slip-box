@@ -123,6 +123,14 @@ async def invoke(payload, context):
     if isinstance(payload, dict) and payload.get("mode") == "reclassify":
         log.info("Invoking Slip Box classification agent (reclassification pass)...")
         agent = build_classification_agent(hooks=[IngestOutcomeTracker(session_id)])
+    elif isinstance(payload, dict) and payload.get("mode") == "summarize":
+        # write_summary is already in the default agent's tools/system prompt
+        # (see the SUMMARY CARDS section above) — no separate specialist
+        # agent needed here, unlike reclassify. This branch exists purely so
+        # the log line doesn't misleadingly say "ingestion agent" for an
+        # on-demand summarize request.
+        log.info("Invoking Slip Box agent (on-demand summarize pass)...")
+        agent = get_or_create_agent(session_id)
     else:
         log.info("Invoking Slip Box ingestion agent...")
         agent = get_or_create_agent(session_id)

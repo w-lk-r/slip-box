@@ -260,6 +260,8 @@ starts and N deploy surfaces instead of one).
 
 **This deployment-shape question is still open — not resolved by the 2026-08-23 build above.** Both the ingestion and classification agents run inside the same shared AgentCore Runtime process/entrypoint today; the split built is a composition change (two `Agent` objects, `Agent.as_tool()` wiring, payload-level `mode` dispatch), not a change to how many Runtime resources are deployed. Worth revisiting once/if `--research` (`#7`) adds a third agent to the mix — three agents sharing one entrypoint is a different cost/blast-radius tradeoff than two.
 
+**On-demand summarize — RESOLVED 2026-08-23, matching the dispatch prediction above exactly.** Built as `POST /summarize` → `mode: "summarize"` on the same `main.py` payload-dispatch mechanism (a real UI action — multi-select notes, "Summarize these" — not a free-text omnibox), reusing the default agent rather than a third specialist since `write_summary`/`update_summary` were already on its tool list. See `docs/build-log.md`'s "On-demand summarize" entry for the full build.
+
 ## 9. DynamoDB has no reconciliation path for edits made directly in S3/KB — Stage 1 + Stage 2 RESOLVED 2026-08-22, staging bucket still open
 
 **Flagged next up 2026-08-22** — reprioritized ahead of #7 (`--research` fan-out) and #8 (classification split). The remaining Lambda half below has been sitting as "not urgent, no trigger yet" since the clobber-bug fix, but every schema-touching feature landed since (Source model, ingest-outcome tracking, PDF ingestion, Guardrails) has widened the surface for DynamoDB/S3 to drift — worth closing this gap while the schema is still relatively simple rather than letting more features stack on top of a known-inconsistent read path.
@@ -508,6 +510,8 @@ interrupted syncs for a solo user syncing their own vault, not a security
 boundary against untrusted third parties (unlike Guardrails, which *is*
 that). Worth building once `#9`'s Stage 1 is live and `aws s3 sync` is
 actually in regular use, not before.
+
+**`_handle_delete`'s trigger gap — RESOLVED 2026-08-23.** Everything documented above about Stage 1's `ObjectRemoved` handling was already correct and already live, but nothing in the app had ever actually deleted an S3 object to fire it — no `DELETE /items/{note_id}` route existed anywhere, and the user-facing API Lambda held no `s3:DeleteObject` grant at all. Built as part of adding Delete to the mobile Review flow: the new endpoint deletes only the S3 object(s) and lets this existing reconciler logic do 100% of the DynamoDB cascade, deliberately not touching `items`/`edges` directly from the API layer (doing so would race `_handle_delete`'s own `s3_key` lookup). See `docs/build-log.md`'s "Review gets Tag and Delete" entry.
 
 ## 10. Bidirectional Obsidian/S3 sync — open question, not scoped yet
 

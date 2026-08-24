@@ -1,6 +1,4 @@
-import { router } from 'expo-router';
-import { useShareIntentContext } from 'expo-share-intent';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ActivityIndicator, StyleSheet, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -9,77 +7,46 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { useIngestFlow, type IngestSource } from '@/lib/useIngestFlow';
 import { toIngestPayload } from '@/lib/shareIntent';
-import { fetchYoutubeContent, isYoutubeUrl, type YoutubeContent } from '@/lib/youtube';
+import { useIngestFlow, type IngestSource } from '@/lib/useIngestFlow';
 
-export default function ShareScreen() {
+export default function SubmitScreen() {
   const theme = useTheme();
-  const { shareIntent, resetShareIntent } = useShareIntentContext();
-  const [youtubeContent, setYoutubeContent] = useState<YoutubeContent | null>(null);
-  const [youtubeLoading, setYoutubeLoading] = useState(false);
+  const [input, setInput] = useState('');
 
-  const basePayload = toIngestPayload(shareIntent);
-  const shareUrl = basePayload && 'url' in basePayload ? basePayload.url : null;
+  // Same URL-vs-plain-text detection share.tsx's share-sheet path already
+  // uses — a bare link becomes {url}, anything else becomes {text}.
+  const trimmed = input.trim();
+  const source: IngestSource | null = trimmed ? toIngestPayload({ text: trimmed }) : null;
 
-  // A shared link that's YouTube gets its transcript fetched from the phone's
-  // own network connection before send — AWS's IPs are blocked by YouTube's
-  // transcript endpoint, the phone's aren't. Falls back to the raw URL (and
-  // the backend's own graceful "no transcript" handling) if this fails.
-  useEffect(() => {
-    setYoutubeContent(null);
-    if (shareUrl && isYoutubeUrl(shareUrl)) {
-      setYoutubeLoading(true);
-      fetchYoutubeContent(shareUrl)
-        .then(setYoutubeContent)
-        .finally(() => setYoutubeLoading(false));
-    }
-  }, [shareUrl]);
+  const { status, error, mode, setMode, topic, setTopic, outcome, handleSend, reset } = useIngestFlow(source);
 
-  const source: IngestSource | null = basePayload
-    ? youtubeContent
-      ? { text: youtubeContent.text, source_url: youtubeContent.sourceUrl }
-      : basePayload
-    : null;
+  async function handleSendAndClear() {
+    await handleSend();
+  }
 
-  const { status, error, mode, setMode, topic, setTopic, outcome, handleSend } = useIngestFlow(source, youtubeLoading);
-
-  function handleDone() {
-    resetShareIntent();
-    router.back();
+  function handleSendAnother() {
+    setInput('');
+    reset();
   }
 
   return (
     <ThemedView style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
-        {!basePayload && (
-          <ThemedText>Nothing shareable was detected — closing this and try again.</ThemedText>
-        )}
-
-        {basePayload && status === 'idle' && (
+      <SafeAreaView style={styles.safeArea} edges={['bottom']}>
+        {status === 'idle' && (
           <>
-            <ThemedText type="smallBold">
-              {youtubeContent
-                ? 'YouTube transcript fetched'
-                : youtubeLoading
-                  ? 'Fetching YouTube transcript…'
-                  : 'url' in basePayload
-                    ? 'Link detected'
-                    : 'Text detected'}
+            <ThemedText type="small" themeColor="textSecondary">
+              Paste a link or some text
             </ThemedText>
-            <ThemedView type="backgroundElement" style={styles.preview}>
-              {youtubeLoading ? (
-                <ActivityIndicator />
-              ) : (
-                <ThemedText numberOfLines={6}>
-                  {youtubeContent
-                    ? youtubeContent.text
-                    : 'url' in basePayload
-                      ? basePayload.url
-                      : basePayload.text}
-                </ThemedText>
-              )}
-            </ThemedView>
+            <TextInput
+              value={input}
+              onChangeText={setInput}
+              placeholder="https://... or paste a passage"
+              placeholderTextColor={theme.textSecondary}
+              multiline
+              autoCapitalize="none"
+              style={[styles.input, { color: theme.text }]}
+            />
 
             <ThemedText type="small" themeColor="textSecondary">
               How many notes?
@@ -101,8 +68,8 @@ export default function ShareScreen() {
 
             <ThemedText
               type="link"
-              onPress={youtubeLoading ? undefined : handleSend}
-              themeColor={youtubeLoading ? 'textSecondary' : undefined}
+              onPress={source ? handleSendAndClear : undefined}
+              themeColor={source ? undefined : 'textSecondary'}
               style={styles.action}
             >
               Send to Slip Box
@@ -124,7 +91,7 @@ export default function ShareScreen() {
             <ThemedText type="smallBold">Sent ✓</ThemedText>
             {!outcome && (
               <ThemedText type="small" style={styles.hint}>
-                Slip Box is processing it now — it'll show up in your items shortly.
+                Slip Box is processing it now — check the Notes tab shortly.
               </ThemedText>
             )}
             {outcome && 'error' in outcome && (
@@ -144,8 +111,8 @@ export default function ShareScreen() {
                 No note created — {outcome.skippedReason || "the agent didn't find anything worth saving here."}
               </ThemedText>
             )}
-            <ThemedText type="link" onPress={handleDone} style={styles.action}>
-              Done
+            <ThemedText type="link" onPress={handleSendAnother} style={styles.action}>
+              Add another
             </ThemedText>
           </>
         )}
@@ -175,10 +142,14 @@ const styles = StyleSheet.create({
     padding: Spacing.four,
     gap: Spacing.two,
   },
-  preview: {
-    padding: Spacing.three,
+  input: {
+    minHeight: 100,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#8888',
     borderRadius: Spacing.two,
-    marginBottom: Spacing.two,
+    padding: Spacing.three,
+    fontSize: 16,
+    textAlignVertical: 'top',
   },
   modeHint: {
     opacity: 0.8,

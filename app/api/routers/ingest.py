@@ -3,8 +3,9 @@ import uuid
 
 from fastapi import APIRouter, HTTPException
 
-from clients import WORKER_FUNCTION_NAME, ingest_sessions_table, lambda_client
-from models import IngestRequest, IngestResponse, IngestStatusResponse
+from clients import S3_BUCKET, WORKER_FUNCTION_NAME, ingest_sessions_table, items_table, lambda_client, s3
+from linkgen import parse_frontmatter
+from models import IngestRequest, IngestResponse, IngestStatusResponse, SummarizeRequest
 
 router = APIRouter()
 
@@ -54,6 +55,57 @@ def ingest(req: IngestRequest):
 
     session_id = f"session-{uuid.uuid4()}"
     payload = {"prompt": _build_prompt(req), "session_id": session_id}
+    lambda_client.invoke(
+        FunctionName=WORKER_FUNCTION_NAME,
+        InvocationType="Event",
+        Payload=json.dumps(payload).encode(),
+    )
+    return IngestResponse(session_id=session_id)
+
+
+def _fetch_note_text(note_id: str) -> tuple[str, str] | None:
+    """(title, body) for one note, same S3+frontmatter read items.py's
+    get_item already does — inlined here rather than imported across
+    routers, since this is the only other place that needs it. Returns None
+    if the note doesn't exist, so the caller can collect all missing ids
+    before failing, rather than 404ing on the first one."""
+    item = items_table.get_item(Key={"note_id": note_id}).get("Item")
+    if not item:
+        return None
+    raw = s3.get_object(Bucket=S3_BUCKET, Key=item["s3_key"])["Body"].read().decode()
+    _frontmatter, body = parse_frontmatter(raw)
+    return item["title"], body.strip()
+
+
+def _build_summarize_prompt(note_ids: list[str]) -> str:
+    notes = {note_id: _fetch_note_text(note_id) for note_id in note_ids}
+    missing = [note_id for note_id, text in notes.items() if text is None]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"note(s) not found: {', '.join(missing)}")
+
+    # Declarative, not imperative-commanding — this project hit a real
+    # Guardrails PROMPT_ATTACK false positive earlier from command-shaped
+    # ingestion phrasing (see _mode_instruction above); describing the
+    # situation rather than issuing orders avoided it. Also explicit that
+    # this bypasses the "4 or more" threshold: that guardrail in main.py's
+    # system prompt is scoped to the agent's own automatic-discovery bullet,
+    # not this direct, already-curated request.
+    intro = (
+        "This is a direct request from the user, who has already selected these specific notes to "
+        "synthesize. Write a summary card now via write_summary, grounding it in exactly these note_ids, "
+        "without waiting for the usual four-or-more-notes threshold — that threshold is for your own "
+        "automatic cluster discovery, not a request where the selection has already been made."
+    )
+    body_sections = "\n\n".join(
+        f"Note ({note_id}): {title}\n{text}" for note_id, (title, text) in notes.items()
+    )
+    return f"{intro}\n\n{body_sections}"
+
+
+@router.post("/summarize", status_code=202, response_model=IngestResponse)
+def summarize(req: SummarizeRequest):
+    session_id = f"session-{uuid.uuid4()}"
+    payload = {"prompt": _build_summarize_prompt(req.note_ids), "session_id": session_id, "mode": "summarize"}
     lambda_client.invoke(
         FunctionName=WORKER_FUNCTION_NAME,
         InvocationType="Event",
