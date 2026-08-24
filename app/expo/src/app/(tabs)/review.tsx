@@ -37,6 +37,14 @@ function displayTitle(rawTitle: string, groupItems: ReviewQueueItem[]): string {
   }
 }
 
+// Newest item in a stack, for sorting stacks themselves — matches the
+// Slip Box tab's Recent box convention (newest first) rather than item
+// count, so a single fresh note doesn't get buried under an old, larger
+// backlog batch just because it has fewer items.
+function newestCreatedAt(items: ReviewQueueItem[]): string {
+  return items.reduce((max, i) => (i.created_at && i.created_at > max ? i.created_at : max), '');
+}
+
 // Grouped by source rather than shown flat — "the old system kept different
 // kinds of cards in different boxes rather than labeling each card," and
 // the natural review unit is really "everything that came in from this one
@@ -54,7 +62,7 @@ function groupBySource(items: ReviewQueueItem[], sourceTitles: Map<string, strin
       const rawTitle = key === '__no_source__' ? 'No source' : (sourceTitles.get(key) ?? 'Unknown source');
       return { key, title: displayTitle(rawTitle, groupItems), items: groupItems };
     })
-    .sort((a, b) => b.items.length - a.items.length);
+    .sort((a, b) => newestCreatedAt(b.items).localeCompare(newestCreatedAt(a.items)));
 }
 
 function StackCard({ stack, onPress }: { stack: Stack; onPress: () => void }) {
