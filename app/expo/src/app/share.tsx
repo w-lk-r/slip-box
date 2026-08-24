@@ -44,16 +44,27 @@ export default function ShareScreen() {
 
   const { status, error, mode, setMode, topic, setTopic, outcome, handleSend } = useIngestFlow(source, youtubeLoading);
 
-  function handleDone() {
+  // dismissTo, not back(): this screen is a modal pushed on top of the tabs
+  // by ShareIntentListener (app/_layout.tsx), often as the very first thing
+  // rendered on a fresh cold-start-from-share-sheet launch — there may be no
+  // prior screen for back() to resolve to at all, which is exactly how a
+  // user ended up stranded here with no way out. dismissTo closes the modal
+  // and lands on a specific screen underneath regardless of stack history.
+  function handleClose(destination: '/' | '/review') {
     resetShareIntent();
-    router.back();
+    router.dismissTo(destination);
   }
 
   return (
     <ThemedView style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
         {!basePayload && (
-          <ThemedText>Nothing shareable was detected — closing this and try again.</ThemedText>
+          <>
+            <ThemedText>Nothing shareable was detected here.</ThemedText>
+            <ThemedText type="link" onPress={() => handleClose('/')} style={styles.action}>
+              Close
+            </ThemedText>
+          </>
         )}
 
         {basePayload && status === 'idle' && (
@@ -144,8 +155,8 @@ export default function ShareScreen() {
                 No note created — {outcome.skippedReason || "the agent didn't find anything worth saving here."}
               </ThemedText>
             )}
-            <ThemedText type="link" onPress={handleDone} style={styles.action}>
-              Done
+            <ThemedText type="link" onPress={() => handleClose('/review')} style={styles.action}>
+              Done — go to Review
             </ThemedText>
           </>
         )}
@@ -158,6 +169,9 @@ export default function ShareScreen() {
             </ThemedText>
             <ThemedText type="link" onPress={handleSend} style={styles.action}>
               Try again
+            </ThemedText>
+            <ThemedText type="link" themeColor="textSecondary" onPress={() => handleClose('/')} style={styles.action}>
+              Close
             </ThemedText>
           </>
         )}
