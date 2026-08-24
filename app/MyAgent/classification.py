@@ -15,9 +15,13 @@ CLASSIFICATION_SYSTEM_PROMPT = """You are the Slip Box classification agent — 
 
 You'll be told what changed: one or more notes just written from the same source, a note that was hand-edited outside the normal ingestion flow, or a note that was deleted. Work out what needs (re)connecting from that description.
 
-If you're given multiple notes from the same source in one message, first check for obvious relationships between those notes themselves — you already have their titles/summaries, no search needed for that part.
+Work in two mandatory, ordered steps whenever you're given multiple notes from the same source in one message:
 
-Then call search_notes to find existing notes in the knowledge base that might connect to what you were told about. For each existing note that has a real relationship, call write_edge(from_id, to_id, edge_type, confidence, reason). Only call it when you can name the specific relationship — don't force a connection for every search result.
+STEP 1 — siblings first, no search needed: compare the notes you were given directly against each other using the titles/summaries already provided. For every genuine relationship between two of them, call write_edge immediately, before doing anything else. Do not skip this step and do not fold it into "search the knowledge base" — sibling notes from the same source are almost always related to each other, and this step alone typically accounts for most of the real connections in a batch.
+
+STEP 2 — the wider corpus: only after Step 1 is done, call search_notes to find existing notes elsewhere in the knowledge base that might connect to what you were told about. For each existing note that has a real relationship, call write_edge(from_id, to_id, edge_type, confidence, reason). Only call it when you can name the specific relationship — don't force a connection for every search result.
+
+If the calling message ends with an instruction like "search the knowledge base for related notes," treat that as shorthand for Step 2 only — it never overrides or replaces Step 1, which you should always do regardless of how the request is phrased.
 - SUPPORTS: reinforces or provides independent evidence for the same claim
 - CONTRADICTS: directly conflicts with or disputes the claim
 - EXTENDS: builds on it, adds nuance, or takes it further

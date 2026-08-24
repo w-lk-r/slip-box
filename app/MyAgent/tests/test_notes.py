@@ -22,6 +22,7 @@ from tools.notes import (
     _youtube_video_id,
     fetch_url,
     read_pdf,
+    write_edge,
 )
 
 
@@ -97,6 +98,42 @@ def _create_uploads_bucket():
 
     boto3.client("s3", region_name="ap-southeast-2").create_bucket(
         Bucket="test-uploads", CreateBucketConfiguration={"LocationConstraint": "ap-southeast-2"}
+    )
+
+
+def _create_notes_bucket():
+    import boto3
+
+    boto3.client("s3", region_name="ap-southeast-2").create_bucket(
+        Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "ap-southeast-2"}
+    )
+
+
+def _create_items_table():
+    import boto3
+
+    boto3.resource("dynamodb", region_name="ap-southeast-2").create_table(
+        TableName="test-items",
+        KeySchema=[{"AttributeName": "note_id", "KeyType": "HASH"}],
+        AttributeDefinitions=[{"AttributeName": "note_id", "AttributeType": "S"}],
+        BillingMode="PAY_PER_REQUEST",
+    )
+
+
+def _create_edges_table():
+    import boto3
+
+    boto3.resource("dynamodb", region_name="ap-southeast-2").create_table(
+        TableName="test-edges",
+        KeySchema=[
+            {"AttributeName": "from_id", "KeyType": "HASH"},
+            {"AttributeName": "edge_id", "KeyType": "RANGE"},
+        ],
+        AttributeDefinitions=[
+            {"AttributeName": "from_id", "AttributeType": "S"},
+            {"AttributeName": "edge_id", "AttributeType": "S"},
+        ],
+        BillingMode="PAY_PER_REQUEST",
     )
 
 
@@ -454,3 +491,65 @@ class TestFetchYoutube:
                 _fetch_youtube("dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ")
         finally:
             notes_module.YouTubeTranscriptApi = original
+
+
+class TestWriteEdge:
+    def _seed_note(self, note_id: str, title: str = "A Note"):
+        import boto3
+
+        ddb = boto3.resource("dynamodb", region_name="ap-southeast-2")
+        ddb.Table("test-items").put_item(Item={
+            "note_id": note_id, "type": "literature-note", "title": title,
+            "s3_key": f"{note_id}.md", "authored_by": "model", "date": "2026-08-23",
+            "tags": [], "created_at": "2026-08-23T00:00:00", "gsi_pk": "item",
+        })
+        boto3.client("s3", region_name="ap-southeast-2").put_object(
+            Bucket="test-bucket",
+            Key=f"{note_id}.md",
+            Body=f"---\ntitle: {title}\nnote_id: {note_id}\ntype: literature-note\nauthored_by: model\ndate: 2026-08-23\ntags: []\nsupports: []\ncontradicts: []\nextends: []\nrelated_to: []\n---\n\nBody.\n".encode(),
+        )
+
+    @mock_aws
+    def test_writes_a_new_edge(self):
+        _create_items_table()
+        _create_edges_table()
+        _create_notes_bucket()
+        self._seed_note("note-a")
+        self._seed_note("note-b")
+
+        result = write_edge("note-a", "note-b", "RELATED_TO", 0.8, "genuinely related")
+
+        assert result["written"] is True
+        assert "edge_id" in result
+
+    @mock_aws
+    def test_skips_duplicate_edge_same_from_to_type(self):
+        # Real bug caught live: independent classification passes rediscovering
+        # the same genuine connection each wrote a brand-new edge, since
+        # nothing checked whether one already existed for this (from, to, type).
+        _create_items_table()
+        _create_edges_table()
+        _create_notes_bucket()
+        self._seed_note("note-a")
+        self._seed_note("note-b")
+
+        first = write_edge("note-a", "note-b", "RELATED_TO", 0.8, "first pass")
+        second = write_edge("note-a", "note-b", "RELATED_TO", 0.85, "second pass, rediscovered")
+
+        assert first["written"] is True
+        assert second["written"] is False
+        assert second["reason"] == "duplicate edge already exists"
+        assert second["edge_id"] == first["edge_id"]
+
+    @mock_aws
+    def test_different_type_to_same_pair_is_not_a_duplicate(self):
+        _create_items_table()
+        _create_edges_table()
+        _create_notes_bucket()
+        self._seed_note("note-a")
+        self._seed_note("note-b")
+
+        write_edge("note-a", "note-b", "RELATED_TO", 0.8, "topically connected")
+        result = write_edge("note-a", "note-b", "EXTENDS", 0.8, "also builds on it")
+
+        assert result["written"] is True

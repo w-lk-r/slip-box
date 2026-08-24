@@ -9,7 +9,7 @@ from decimal import Decimal
 
 import boto3
 import httpx
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from dotenv import load_dotenv
 from strands import tool
 from youtube_transcript_api import CouldNotRetrieveTranscript, YouTubeTranscriptApi
@@ -376,6 +376,21 @@ def write_edge(from_id: str, to_id: str, edge_type: str, confidence: float, reas
     if confidence < EDGE_CONFIDENCE_THRESHOLD:
         log.info(f"Edge dropped below threshold: {from_id} -{edge_type}-> {to_id} ({confidence})")
         return {"written": False, "reason": "below confidence threshold"}
+
+    # Real duplicate caught live: independent classification passes (a fresh
+    # ingest's own call, a later Stage 2 reclassification) can rediscover the
+    # same genuine connection and each write it as a brand-new edge, since
+    # nothing checked whether one already existed. Skip rather than update on
+    # a match — an update would silently clobber a confidence the user may
+    # have already corrected by hand, undermining the whole point of edges
+    # being user-editable.
+    existing = ddb.Table(EDGES_TABLE).query(
+        KeyConditionExpression=Key("from_id").eq(from_id),
+        FilterExpression=Attr("to_id").eq(to_id) & Attr("type").eq(edge_type),
+    ).get("Items", [])
+    if existing:
+        log.info(f"Edge already exists, skipping duplicate: {from_id} -{edge_type}-> {to_id}")
+        return {"written": False, "reason": "duplicate edge already exists", "edge_id": existing[0]["edge_id"]}
 
     edge_id = _write_edge_record(from_id, to_id, edge_type, confidence, reason)
     return {"written": True, "edge_id": edge_id}
