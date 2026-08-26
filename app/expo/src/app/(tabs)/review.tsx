@@ -60,7 +60,11 @@ function groupBySource(items: ReviewQueueItem[], sourceTitles: Map<string, strin
   return Array.from(groups.entries())
     .map(([key, groupItems]) => {
       const rawTitle = key === '__no_source__' ? 'No source' : (sourceTitles.get(key) ?? 'Unknown source');
-      return { key, title: displayTitle(rawTitle, groupItems), items: groupItems };
+      // Within a stack, oldest first — the natural reading order for a
+      // sequence of highlights/notes pulled from the same source, the
+      // reverse of the overall queue's own newest-first order.
+      const ordered = [...groupItems].sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''));
+      return { key, title: displayTitle(rawTitle, ordered), items: ordered };
     })
     .sort((a, b) => newestCreatedAt(b.items).localeCompare(newestCreatedAt(a.items)));
 }
