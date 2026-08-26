@@ -57,19 +57,33 @@ def _slugify(title: str) -> str:
 _TRACKING_PARAMS = {"si", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "feature", "fbclid", "gclid", "t"}
 
 
-def _normalize_source_key(url: str) -> str:
+def _normalize_source_key(url: str, title: str = "") -> str:
     """
     Canonical dedup key for a source URL. YouTube collapses to just the video
     ID — any two shares of "the same video" only ever differ in tracking or
     timestamp query params, never in a way that changes identity. Everything
     else gets a general normalization: lowercase host, drop tracking params,
     sort what's left, strip trailing slash and fragment.
+
+    Amazon/Kindle is a real, separate case: Kindle's own share action mints a
+    fresh a.co short link (and read.amazon.com deep link) per *highlight*,
+    even for the same book — there's no stable per-book URL to normalize
+    against the way YouTube has a video ID. Dedupes by title instead,
+    whenever a real one was given (not the URL-fallback case) — two
+    citations sharing the exact book title are treated as the same source.
+    A real, if rare, false-merge risk (two different books sharing a title)
+    accepted as a personal-scale tradeoff, rather than one book fragmenting
+    into a fresh Source record per quote shared — a real case hit live.
     """
     video_id = _youtube_video_id(url)
     if video_id:
         return f"youtube:{video_id}"
 
     parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc.lower()
+    if title and (host == "a.co" or host.endswith(".amazon.com")):
+        return f"amazon-title:{title.strip().lower()}"
+
     kept = sorted((k, v) for k, v in urllib.parse.parse_qsl(parsed.query) if k.lower() not in _TRACKING_PARAMS)
     path = parsed.path.rstrip("/") or "/"
     return urllib.parse.urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, "", urllib.parse.urlencode(kept), ""))
@@ -95,7 +109,7 @@ def _resolve_source(source_url: str = "", source_pdf_key: str = "", source_title
         source_type = "pdf"
         url = ""
     elif source_url:
-        source_key = _normalize_source_key(source_url)
+        source_key = _normalize_source_key(source_url, source_title)
         title = source_title or source_url
         source_type = "youtube" if _youtube_video_id(source_url) else "web"
         url = source_url

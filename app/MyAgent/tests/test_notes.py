@@ -216,6 +216,35 @@ class TestNormalizeSourceKey:
         b = _normalize_source_key("https://example.com/article?id=6")
         assert a != b
 
+    def test_amazon_short_links_with_same_title_dedupe(self):
+        # The exact real bug hit live: Kindle mints a fresh a.co short link
+        # per highlight, even from the same book, so two different-looking
+        # URLs need to still collapse to one Source when the title matches.
+        a = _normalize_source_key("https://a.co/07w3jZGv", "The One-Straw Revolution")
+        b = _normalize_source_key("https://a.co/dK9pQeM", "The One-Straw Revolution")
+        assert a == b
+
+    def test_amazon_short_links_different_title_dont_match(self):
+        a = _normalize_source_key("https://a.co/07w3jZGv", "The One-Straw Revolution")
+        b = _normalize_source_key("https://a.co/dK9pQeM", "Silent Spring")
+        assert a != b
+
+    def test_amazon_link_without_a_title_falls_back_to_url_normalization(self):
+        # No real title to dedupe on (e.g. source_title wasn't set) — same
+        # general normalization as any other host, not a title-key.
+        a = _normalize_source_key("https://a.co/07w3jZGv")
+        b = _normalize_source_key("https://a.co/07w3jZGv")
+        c = _normalize_source_key("https://a.co/dK9pQeM")
+        assert a == b
+        assert a != c
+
+    def test_non_amazon_host_with_title_unaffected(self):
+        # Title-based dedup is scoped to Amazon/Kindle hosts only — an
+        # ordinary web URL keeps deduping by URL even when a title is given.
+        a = _normalize_source_key("https://example.com/article-one", "Same Title")
+        b = _normalize_source_key("https://example.com/article-two", "Same Title")
+        assert a != b
+
 
 class TestFrontmatterRoundTrip:
     def test_scalar_wikilink_source_field_round_trips(self):
