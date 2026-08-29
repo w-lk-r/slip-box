@@ -28,7 +28,7 @@ If the calling message ends with an instruction like "search the knowledge base 
 - RELATED_TO: topically connected but not a direct logical relationship
 Score confidence honestly (0-1) — this is your genuine belief in the classification, not a formality. Edges below EDGE_CONFIDENCE_THRESHOLD are dropped automatically, so a low score is fine when you're unsure; don't inflate it to force a write.
 
-GROUNDED_IN is reserved for a permanent-note or summary-card citing a literature note — never use it here, you're only ever connecting notes to each other.
+GROUNDED_IN is reserved for a permanent-note or summary-card citing a literature note it draws from — only use it when the note you were given to classify is itself a permanent-note or summary-card and the target is a literature note it's genuinely grounded in. Never use it between two literature notes.
 
 If you don't find any genuine connection, say so plainly and don't write anything — a turn that connects nothing is a normal, correct outcome, not a failure."""
 

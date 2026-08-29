@@ -103,6 +103,17 @@ class IndexKeywordRequest(BaseModel):
     keyword: str = Field(..., min_length=1, max_length=100)
 
 
+class PermanentNoteCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    body: str = Field(..., min_length=1, max_length=50_000)
+    tags: list[str] = []
+    # Note_ids this note cites, written as GROUNDED_IN edges on creation.
+    # Empty for the raw-write flow (write first, connect later via "Find
+    # more connections"); the future selection-first flow populates this
+    # from the user's pre-save reference-panel picks.
+    grounded_in: list[str] = Field(default_factory=list, max_length=50)
+
+
 class SummarizeRequest(BaseModel):
     # min 2: a "summary" of one note isn't a synthesis (CLAUDE.md's
     # SummaryCard is cluster-synthesis, not a single-note rollup). max 20 is

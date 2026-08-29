@@ -28,6 +28,11 @@ export class ApiStack extends Stack {
 
     const agentRuntimeArn =
       'arn:aws:bedrock-agentcore:ap-southeast-2:690445895420:runtime/SlipBox_MyAgent-wy1BfP93X9';
+    // Same KB agentcore.json configures for the agent itself — needed here
+    // too now that POST /items/permanent triggers a KB sync directly (no
+    // agent in that write path, so this Lambda needs its own KB grant).
+    const kbId = 'EHSL8ZENQX';
+    const kbArn = `arn:aws:bedrock:ap-southeast-2:690445895420:knowledge-base/${kbId}`;
 
     // Async ingest worker — no API Gateway in front of it, so no timeout ceiling
     // beyond its own (generous) configured timeout. Only permission it needs is
@@ -87,17 +92,19 @@ export class ApiStack extends Stack {
         UPLOADS_BUCKET: 'slip-box-uploads-690445895420',
         AGENT_RUNTIME_ARN: agentRuntimeArn,
         WORKER_FUNCTION_NAME: workerFn.functionName,
+        KB_ID: kbId,
       },
     });
     workerFn.grantInvoke(apiFn);
 
     apiFn.addToRolePolicy(
       new iam.PolicyStatement({
-        // UpdateItem added for POST/DELETE /items/{note_id}/review (mark/
-        // unmark reviewed, docs/frontend-ux-spec.md) — every other apiFn
-        // items action was read-only until this.
+        // PutItem added for POST /items/permanent (PermanentNote direct
+        // write path, no agent involved — CLAUDE.md's note-taxonomy
+        // section). UpdateItem was earlier added for POST/DELETE
+        // /items/{note_id}/review (mark/unmark reviewed).
         sid: 'ItemsReadWrite',
-        actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:Scan', 'dynamodb:UpdateItem'],
+        actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:Scan', 'dynamodb:UpdateItem', 'dynamodb:PutItem'],
         resources: [
           'arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-items',
           'arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-items/index/recent-index',
@@ -126,11 +133,33 @@ export class ApiStack extends Stack {
           'dynamodb:Scan',
           'dynamodb:UpdateItem',
           'dynamodb:DeleteItem',
+          // PutItem added for POST /items/permanent's GROUNDED_IN edge
+          // writes (a PermanentNote's own citations, written directly —
+          // deterministic, not a scored classification, same as
+          // write_summary's grounded_in edges on the agent side).
+          'dynamodb:PutItem',
         ],
         resources: [
           'arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-edges',
           'arn:aws:dynamodb:ap-southeast-2:690445895420:table/slip-box-edges/index/to_id-index',
         ],
+      })
+    );
+    apiFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        // POST /items/permanent triggers a KB sync directly after writing a
+        // PermanentNote (no agent in that write path) — mirrors the equivalent
+        // grant on the agent's own role (app/MyAgent/policies/agent-permissions.json).
+        sid: 'KnowledgeBaseSync',
+        // Both action prefixes granted here to match the working grant
+        // already on the agent's own role (app/MyAgent/policies/agent-permissions.json).
+        actions: [
+          'bedrock:StartIngestionJob',
+          'bedrock:ListDataSources',
+          'bedrock-agent:StartIngestionJob',
+          'bedrock-agent:ListDataSources',
+        ],
+        resources: [kbArn],
       })
     );
     apiFn.addToRolePolicy(
@@ -192,6 +221,11 @@ export class ApiStack extends Stack {
         // Stage 2 (review-todo #9) — fires an async reclassification pass
         // through the same WorkerFunction path POST /ingest already uses.
         WORKER_FUNCTION_NAME: workerFn.functionName,
+        // reconciler.py never calls trigger_kb_sync itself, but it imports
+        // linkgen.py, which imports clients.py, which now reads KB_ID
+        // unconditionally at module import time — same reason every other
+        // var in this block is set even when this function doesn't use it.
+        KB_ID: kbId,
       },
     });
     workerFn.grantInvoke(reconcilerFn);

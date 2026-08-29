@@ -1,14 +1,18 @@
 import base64
 import datetime
 import json
+import logging
+import uuid
 
 from boto3.dynamodb.conditions import Attr, Key
 from fastapi import APIRouter, HTTPException, Query
 
-from clients import S3_BUCKET, edges_table, items_table, s3, sources_table
-from linkgen import parse_frontmatter
-from models import IndexKeywordRequest, ItemType
+from clients import S3_BUCKET, WORKER_FUNCTION_NAME, edges_table, items_table, lambda_client, s3, sources_table
+from linkgen import parse_frontmatter, trigger_kb_sync, write_permanent_note
+from models import IndexKeywordRequest, IngestResponse, ItemType, PermanentNoteCreateRequest
 from serialize import clean
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -56,6 +60,26 @@ def list_items(
     result = {"items": items}
     if "LastEvaluatedKey" in response:
         result["cursor"] = _encode_cursor(response["LastEvaluatedKey"])
+    return result
+
+
+@router.post("/items/permanent", status_code=201)
+def create_permanent_note(req: PermanentNoteCreateRequest):
+    """
+    Direct write path for a PermanentNote — no agent in the loop (see
+    CLAUDE.md's note-taxonomy section). Registered before GET /items/{note_id}
+    so the literal "permanent" path segment isn't swallowed by that route's
+    {note_id} match.
+    """
+    missing = [nid for nid in req.grounded_in if not items_table.get_item(Key={"note_id": nid}).get("Item")]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"note(s) not found: {', '.join(missing)}")
+
+    result = write_permanent_note(req.title, req.body, req.tags, req.grounded_in)
+    try:
+        trigger_kb_sync()
+    except Exception:
+        log.exception(f"KB sync trigger failed after writing permanent note {result['note_id']}")
     return result
 
 
@@ -253,6 +277,48 @@ def get_item(note_id: str):
     result["outgoing_edges"] = outgoing_edges
     result["incoming_edges"] = incoming_edges
     return result
+
+
+@router.post("/items/{note_id}/find-connections", status_code=202, response_model=IngestResponse)
+def find_connections(note_id: str):
+    """
+    Triggers a reclassification pass for one already-existing permanent-note
+    or summary-card, asking the classification agent to search for
+    connections it wasn't given at creation time — the "Find more
+    connections" button in the raw-write flow (CLAUDE.md's PermanentNote
+    section). Reuses reconciler.py's exact Stage 2 mechanism (mode:
+    "reclassify" via the Worker Lambda) rather than building new async
+    infrastructure — the same GET /ingest/{session_id} polling endpoint
+    every other async action in this API already uses reports the result.
+    """
+    item = items_table.get_item(Key={"note_id": note_id}).get("Item")
+    if not item:
+        raise HTTPException(status_code=404, detail="item not found")
+    if item.get("type") not in ("permanent-note", "summary-card"):
+        raise HTTPException(status_code=400, detail="find-connections is only for a permanent-note or summary-card")
+
+    existing = s3.get_object(Bucket=S3_BUCKET, Key=item["s3_key"])["Body"].read().decode()
+    _frontmatter, body = parse_frontmatter(existing)
+    title = item.get("title") or note_id
+
+    # Declarative, not imperative — see ingest.py's _build_summarize_prompt
+    # for the Guardrails PROMPT_ATTACK false positive this phrasing style
+    # avoided. Explicitly names this note's own type so the classification
+    # agent knows GROUNDED_IN is available here (see the conditional in its
+    # own system prompt, classification.py) — never for two literature notes.
+    prompt = (
+        f'This {item["type"]} ("{title}", note_id: {note_id}) already exists and was just asked to find more '
+        f"connections for itself. Search the knowledge base for genuinely related notes and score any real "
+        f"connections — including GROUNDED_IN toward a literature note this note is truly grounded in, not just "
+        f"RELATED_TO. Existing connections don't need to be re-added.\n\n{body.strip()}"
+    )
+    session_id = f"session-{uuid.uuid4()}"
+    lambda_client.invoke(
+        FunctionName=WORKER_FUNCTION_NAME,
+        InvocationType="Event",
+        Payload=json.dumps({"prompt": prompt, "session_id": session_id, "mode": "reclassify"}).encode(),
+    )
+    return IngestResponse(session_id=session_id)
 
 
 @router.delete("/items/{note_id}", status_code=202)

@@ -12,6 +12,7 @@ SOURCES_TABLE = os.environ["SOURCES_TABLE"]
 INGEST_SESSIONS_TABLE = os.environ["INGEST_SESSIONS_TABLE"]
 UPLOADS_BUCKET = os.environ["UPLOADS_BUCKET"]
 AGENT_RUNTIME_ARN = os.environ["AGENT_RUNTIME_ARN"]
+KB_ID = os.environ["KB_ID"]
 WORKER_FUNCTION_NAME = os.environ.get("WORKER_FUNCTION_NAME", "")
 REGION = os.environ.get("AWS_REGION", os.environ.get("REGION", "ap-southeast-2"))
 
@@ -24,6 +25,7 @@ s3 = boto3.client("s3", region_name=REGION, endpoint_url=f"https://s3.{REGION}.a
 ddb = boto3.resource("dynamodb", region_name=REGION)
 lambda_client = boto3.client("lambda", region_name=REGION)
 agentcore = boto3.client("bedrock-agentcore", region_name=REGION)
+bedrock_agent = boto3.client("bedrock-agent", region_name=REGION)
 
 items_table = ddb.Table(ITEMS_TABLE)
 edges_table = ddb.Table(EDGES_TABLE)

@@ -84,3 +84,19 @@ export type ReviewQueueItem = ItemSummary & {
   outgoing_edges: QueueOutgoingEdge[];
   incoming_edges: QueueIncomingEdge[];
 };
+
+// Mirrors app/api/models.py's PermanentNoteCreateRequest.
+export type PermanentNoteCreateRequest = {
+  title: string;
+  body: string;
+  tags?: string[];
+  grounded_in?: string[];
+};
+
+// Mirrors app/api/linkgen.py's write_permanent_note return shape (also
+// POST /items/permanent's response).
+export type PermanentNoteCreateResponse = {
+  note_id: string;
+  s3_key: string;
+  title: string;
+};
