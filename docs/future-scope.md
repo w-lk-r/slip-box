@@ -66,6 +66,74 @@ Read-only shareable links to a subgraph — e.g. share the cluster of notes arou
 
 ---
 
+## `--research` fan-out
+
+Moved out of MVP scope entirely 2026-08-30 (previously MVP Scope item 3 in
+`CLAUDE.md`) — blocked on picking a real web-search provider (Tavily or Exa
+via `strands_tools`), which needs its own API key. Asked the user
+2026-08-22, deferred; asked again 2026-08-30 and the user chose to pull the
+whole feature out of the critical path rather than leave a blocked item in
+the build order. Revisit once a provider is actually chosen — everything
+below is ready to build the moment that happens.
+
+**Blocked on a real decision, not a technical gap**: web search needs a real provider (Tavily or Exa via `strands_tools`), and that means an actual API key. Everything below is ready to build the moment a provider is chosen; building the multi-node orchestration before then risks guessing the wrong shape.
+
+**Concrete SDK answer confirmed 2026-08-22** (see `.claude/skills/strands-agents-sdk/SKILL.md`): Strands' `Graph`/`GraphBuilder` (`strands/multiagent/graph.py`) gives deterministic DAG execution with built-in budget controls — `set_max_node_executions`, `set_execution_timeout`, `set_node_timeout`. **Correction, found 2026-08-22 while verifying the real API directly in the installed source (not assumed)**: these controls are *not* what caps "max search queries" or "max sources fetched" — they bound how many times a *node* re-executes and how long it's allowed to take, not how many times a tool gets called *within* one node's own turn. `add_node(executor: AgentBase | MultiAgentBase, ...)` also confirmed each node is a real `Agent` instance, not a plain function. So the per-tool caps below still need their own enforcement, independent of and complementary to `Graph`'s controls, not replaced by them — the original phrasing here conflated the two.
+
+**Recommended node shape**, now that the real API is confirmed: two `Agent` instances wired via `GraphBuilder` — a research node (system prompt scoped to search+fetch+cite; tools: the chosen provider's search tool, the now-hardened `fetch_url` and `search_notes` to check the KB first) feeding into the existing ingestion agent's node for classification/writing, via `add_edge`.
+
+`CLAUDE.md` describes a `--research` path that fans out to a research agent
+before classification, but there's no research agent, no outward
+search tool, and no budget enforcement. Notes for the build:
+
+**Tools needed**
+- Web search (Tavily or Exa via `strands_tools`) — the one remaining
+  blocker, above.
+- `search_notes` first, always — check the KB before going outward so
+  research doesn't re-fetch what's already grounding an existing note.
+- `fetch_url` — already hardened: branches by content type, PDF
+  read natively, structured `{title, author, text}` for everything else.
+  No further work needed here specifically for `--research`.
+- A citation/source-resolution tool that resolves or creates the canonical
+  `Source` record from fetched metadata — already exists (`_resolve_source`),
+  reusable as-is.
+
+**Limiting expansion size — enforced inside the tools, not via `Graph`'s controls (see correction above)**
+Don't rely on the system prompt to self-limit tool-call counts, and don't
+rely on `Graph`'s node/timeout caps to do this either — they operate at
+the wrong granularity. A `ResearchBudget` object created per `--research`
+invocation, threaded through the search/fetch tools as shared state (same
+closure pattern as the session cache in `main.py`), hard-stopping on:
+- max search queries per run (e.g. 3–5)
+- max sources fetched per run (e.g. 5–8), chosen from search snippets by
+  relevance, not fetched blind
+- max chars per fetched source (lower than the current 50k — research
+  content competes with the note-writing budget, not just one page)
+- a combined character budget across all fetched sources per run, so a
+  handful of huge pages can't each spend the full per-source cap
+- max new notes written per research fan-out, same shape as the existing
+  4+-notes-triggers-a-summary-card cap
+
+`Graph`'s `set_max_node_executions`/`set_execution_timeout`/`set_node_timeout`
+are still worth setting too — they're a real, complementary outer bound on
+the whole graph run (total wall-clock, runaway re-execution), just not a
+substitute for the per-tool caps above.
+
+Once a cap is hit, the tool should return a truncated/"budget exhausted"
+result rather than error, so the agent wraps up with what it has instead of
+retrying.
+
+**Getting references into expanded notes**
+Reuse the `Source`-vertex fix (`docs/review-todo.md` #3) rather than building
+something research-specific: every fetched URL resolves to a canonical
+`source_id` (deduped, metadata captured at fetch time). Notes written from
+research link to it the same way any directly-ingested note would —
+`source: [[source-id]]` — using the `RESEARCHED_VIA` edge type already named
+in `CLAUDE.md` (`Item → Source`) to keep "the user gave me this" distinct
+from "I went and found this."
+
+---
+
 ## Luhmann-style keyword index cards
 
 Raised 2026-08-22, not yet scoped or shaped. Luhmann's actual Zettelkasten had a second, separate card index alongside the numbered slip-box itself: a keyword index (`Schlagwortkatalog`) where each keyword card pointed to just one or two *entry-point* note numbers, not an exhaustive list of every note touching that topic — the idea was to jump into the graph at a good starting point and follow connections from there, not get a flat search-result list.

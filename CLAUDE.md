@@ -207,6 +207,11 @@ Build in this order, get each layer solid before moving on:
 
 1. Fast-path ingestion → DynamoDB/Neptune writes
 2. Inline edge correction UI (graph view) — pivoted away from a separate pending-review queue, see Confidence and edge correction above
-3. `--research` fan-out
-4. SWOT analysis and permanent note promotion (stretch)
-5. Frontmatter as a pending-connection review surface (stretch)
+3. SWOT analysis and permanent note promotion (stretch)
+4. Frontmatter as a pending-connection review surface (stretch)
+
+`--research` fan-out moved out of MVP scope entirely (2026-08-30) — see
+`docs/future-scope.md`'s "`--research` fan-out" section. Blocked on picking
+a real web-search provider (Tavily/Exa), which needs its own API key; the
+user deferred that decision, and pulling the whole feature out of the
+critical path was preferred over leaving a blocked item in the build order.
