@@ -197,6 +197,22 @@ class TestHandleUpsert:
         sidecar = reconciler.s3.get_object(Bucket=S3_BUCKET, Key="untitled-hand-note.md.metadata.json")
         assert sidecar["Body"].read()
 
+    def test_permanent_note_with_no_authored_by_stays_sparse(self, env):
+        # Real bug caught live 2026-08-30: write_permanent_note deliberately
+        # never writes authored_by (CLAUDE.md — PermanentNote is always
+        # user-authored, no draft state), but this handler fires on every
+        # .md ObjectCreated regardless of write origin, and used to default
+        # the DynamoDB row's authored_by to "user" whenever frontmatter
+        # omitted it, silently re-adding a field the write path meant to omit.
+        raw = "---\ntitle: An Idea\nnote_id: an-idea-abc123\ntype: permanent-note\ndate: 2026-08-30\ntags: []\n---\n\nBody.\n"
+        reconciler.s3.put_object(Bucket=S3_BUCKET, Key="an-idea-abc123.md", Body=raw.encode())
+
+        reconciler._handle_upsert(S3_BUCKET, "an-idea-abc123.md")
+
+        item = items_table.get_item(Key={"note_id": "an-idea-abc123"})["Item"]
+        assert item["type"] == "permanent-note"
+        assert "authored_by" not in item
+
     def test_unparseable_content_skips_without_raising(self, env):
         reconciler.s3.put_object(Bucket=S3_BUCKET, Key="broken.md", Body=b"\xff\xfe not valid text at all")
         reconciler._handle_upsert(S3_BUCKET, "broken.md")  # must not raise

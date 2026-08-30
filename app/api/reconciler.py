@@ -110,7 +110,6 @@ def _handle_upsert(bucket: str, key: str) -> None:
     tags = fields.get("tags")
     values = {
         "type": fields.get("type", "literature-note"),
-        "authored_by": fields.get("authored_by", "user"),
         "title": fields.get("title", ""),
         "s3_key": key,
         "date": fields.get("date", ""),
@@ -119,14 +118,30 @@ def _handle_upsert(bucket: str, key: str) -> None:
         "gsi_pk": "item",
         "body_hash": body_hash,
     }
+    # authored_by stays sparse (like reviewed_at/source_id/index_keywords
+    # elsewhere) rather than defaulting to "user" when frontmatter omits it —
+    # true today only for PermanentNote, whose frontmatter never carries this
+    # field at all (CLAUDE.md: "Always user-authored — no authored_by field,
+    # no draft state"). Every other type's frontmatter always states it
+    # explicitly (write_note/write_summary always write it; the no-note_id
+    # backfill branch above forces a default into fields before this point),
+    # so REMOVE only ever fires here for a genuine PermanentNote write —
+    # without this, Stage 1's own S3-triggered reconciliation was silently
+    # adding the field back onto every PermanentNote row moments after
+    # write_permanent_note deliberately omitted it (caught live 2026-08-30).
+    if "authored_by" in fields:
+        values["authored_by"] = fields["authored_by"]
     update_expression = "SET " + ", ".join(f"#{k} = :{k}" for k in values)
     names = {f"#{k}": k for k in values}
     # A hand-edited body invalidates any prior review — reviewed_at (review
     # UX, docs/frontend-ux-spec.md) is deliberately absent, not null, when
     # unreviewed, so clearing it back to "unreviewed" is a REMOVE, not a SET.
     # Safe even if it was never set (REMOVE on a missing attribute is a no-op).
+    remove_clauses = [] if "authored_by" in fields else ["authored_by"]
     if body_changed:
-        update_expression += " REMOVE reviewed_at"
+        remove_clauses.append("reviewed_at")
+    if remove_clauses:
+        update_expression += " REMOVE " + ", ".join(remove_clauses)
     items_table.update_item(
         Key={"note_id": note_id},
         UpdateExpression=update_expression,
