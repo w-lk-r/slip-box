@@ -2,6 +2,10 @@
 
 Agent-specific guidance for `app/MyAgent/`. Loaded alongside the root `CLAUDE.md`.
 
+## Agents
+
+The two Strands agents live in `agents/` — `agents/ingestion.py` and `agents/classification.py`, each a self-contained `build_*_agent(hooks=None) -> Agent` factory (system prompt + tools + model). `main.py` is only the AgentCore entrypoint: session-cache wiring and mode dispatch, no agent-definition logic. See root `CLAUDE.md`'s Agent Code section for the full role/tools/invocation comparison table.
+
 ## IAM Permissions
 
 **Never apply IAM changes manually via the AWS console or CLI as a permanent fix.** Manual changes are lost on the next `agentcore deploy`. Any permissions the agent needs must be codified:
@@ -28,17 +32,18 @@ Runtime deps are in `pyproject.toml`. The `.env` file (gitignored) holds local c
 
 ## Tools
 
-| Tool | Purpose |
-|---|---|
-| `write_note` | Writes `.md` + sidecar to S3, record to DynamoDB `items` |
-| `write_edge` | Writes a typed edge to DynamoDB `edges` if confidence ≥ `EDGE_CONFIDENCE_THRESHOLD`; regenerates the source note's frontmatter link list |
-| `write_summary` | Writes a `summary-card` note grounding a cluster of note_ids |
-| `update_summary` | Adds/removes notes from an existing summary card's cluster |
-| `search_notes` | Semantic retrieval against `SlipCaseKB` |
-| `trigger_kb_sync` | Starts KB ingestion job so new notes become searchable |
-| `fetch_url` | Fetches and strips URL content for ingestion |
+| Tool | Agent | Purpose |
+|---|---|---|
+| `write_note` | ingestion | Writes `.md` + sidecar to S3, record to DynamoDB `items` |
+| `write_summary` | ingestion | Writes a `summary-card` note grounding a cluster of note_ids |
+| `update_summary` | ingestion | Adds/removes notes from an existing summary card's cluster |
+| `trigger_kb_sync` | ingestion | Starts KB ingestion job so new notes become searchable |
+| `fetch_url` | ingestion | Fetches and strips URL content for ingestion |
+| `read_pdf` | ingestion | Hands an uploaded PDF to the model as a native Bedrock document block |
+| `search_notes` | both | Semantic retrieval against `SlipCaseKB` |
+| `write_edge` | classification | Writes a typed edge to DynamoDB `edges` if confidence ≥ `EDGE_CONFIDENCE_THRESHOLD`; regenerates the source note's frontmatter link list |
 
-Always call `trigger_kb_sync` after one or more `write_note` or `write_summary` calls.
+Always call `trigger_kb_sync` after one or more `write_note` or `write_summary` calls. The ingestion agent never calls `write_edge` itself — it hands off to the classification agent (`agents/classification.py`'s `classify_tool`, wrapped via `Agent.as_tool()`) instead.
 
 ## Hooks
 

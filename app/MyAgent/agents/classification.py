@@ -7,7 +7,7 @@ from tools.notes import search_notes, write_edge
 # construction time, and this module builds an Agent at import time (below)
 # — must not depend on main.py's own load_dotenv() call having already run,
 # since Python executes this module's top level during main.py's `from
-# classification import ...`, before main.py's own load_dotenv() line.
+# agents.classification import ...`, before main.py's own load_dotenv() line.
 # Matches tools/notes.py's own self-sufficient pattern for the same reason.
 load_dotenv()
 
@@ -39,7 +39,7 @@ def build_classification_agent(hooks=None) -> Agent:
     """Fresh classification Agent instance. Kept as a factory rather than a
     shared singleton so the standalone (Stage 2 reclassification) and
     as-tool-wrapped call paths never share mutable conversation state —
-    mirrors main.py's own per-session Agent construction pattern."""
+    mirrors agents/ingestion.py's own per-session Agent construction pattern."""
     return Agent(
         name="classifier",
         description="Scores typed relationships (SUPPORTS/CONTRADICTS/EXTENDS/RELATED_TO) between notes",

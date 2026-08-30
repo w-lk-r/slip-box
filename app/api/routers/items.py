@@ -305,7 +305,7 @@ def find_connections(note_id: str):
     # for the Guardrails PROMPT_ATTACK false positive this phrasing style
     # avoided. Explicitly names this note's own type so the classification
     # agent knows GROUNDED_IN is available here (see the conditional in its
-    # own system prompt, classification.py) — never for two literature notes.
+    # own system prompt, app/MyAgent/agents/classification.py) — never for two literature notes.
     prompt = (
         f'This {item["type"]} ("{title}", note_id: {note_id}) already exists and was just asked to find more '
         f"connections for itself. Search the knowledge base for genuinely related notes and score any real "

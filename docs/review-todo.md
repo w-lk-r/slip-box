@@ -552,6 +552,12 @@ Found live 2026-08-30 during PermanentNote deploy verification (`?type=literatur
 
 Not urgent — no caller currently combines a small `limit` with `type` in a way that depends on getting every match (the `?type=` filter is mostly used unpaginated or with a generous default `limit=100`), and the existing `cursor`/`LastEvaluatedKey` pagination already means a caller *can* page through to find more if it cared to. Flagging so it doesn't get relied on silently as "if it returns fewer than N, there are fewer than N."
 
+## 15. Deleting a note doesn't trigger a KB re-sync — search can surface stale/deleted notes
+
+Found live 2026-08-30 while re-verifying the agents/ refactor: a `find-connections` call correctly found a real connection, but to a note that had already been deleted earlier in the same session. `DELETE /items/{note_id}` (`items.py`) removes the S3 object and lets `reconciler.py`'s `_handle_delete` clean up DynamoDB, but neither path calls `trigger_kb_sync` — the Bedrock KB's vector index isn't told anything changed, so `search_notes` can keep returning a deleted note's content until some *other* action (any subsequent `write_note`/`write_summary`/`POST /items/permanent`) incidentally triggers a fresh sync.
+
+Self-healing in practice (any normal usage eventually re-syncs it) and low-stakes (worst case is one stale search result, not a data-integrity problem — the dangling DynamoDB/S3 references it could point to are already handled by the reconciler's cascade). Not fixing now; flagging so a future session doesn't mistake a stale KB hit for a real bug in `search_notes`/`write_edge`. Real fix would be `DELETE /items/{note_id}` also calling `trigger_kb_sync` (same pattern `POST /items/permanent` already uses), best-effort.
+
 ---
 
 ## Expo vs Next.js for frontend

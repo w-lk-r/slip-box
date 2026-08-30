@@ -14,7 +14,8 @@ Architecture and design decisions live in this file (below) and in [`docs/build-
 slip-box/
 ├── agentcore/           # AgentCore config and CDK (managed by agentcore CLI)
 ├── app/
-│   ├── MyAgent/         # Strands agent code — main.py is the entrypoint
+│   ├── MyAgent/         # main.py is the AgentCore entrypoint only; agents/ holds
+│   │                    #   the two Strands agents (ingestion.py, classification.py)
 │   ├── api/             # FastAPI backend — Lambda + API Gateway (agentcore/cdk/lib/api-stack.ts)
 │   ├── expo/            # Mobile app — share-sheet capture (see app/expo/README.md)
 │   └── web/             # Next.js web app — graph view (see app/web/README.md)
@@ -88,15 +89,22 @@ This project was verified live (real AWS calls, real deploys) for a long stretch
 
 ## Agent Code
 
-`app/MyAgent/main.py` is the Strands agent wrapped in `BedrockAgentCoreApp` for AgentCore Runtime hosting:
+Two separate Strands agents, each fully defined in its own file under `app/MyAgent/agents/` — not one mega-prompt:
+
+| | `agents/ingestion.py` | `agents/classification.py` |
+|---|---|---|
+| Role | Extracts atomic notes from an incoming source and writes them | Proposes and scores typed connections between notes |
+| Tools | `write_note`, `write_summary`, `update_summary`, `search_notes`, `trigger_kb_sync`, `fetch_url`, `read_pdf`, plus the classification agent wrapped as a tool | `search_notes`, `write_edge` |
+| Invoked as | The default entrypoint agent (session-cached) | Both `Agent.as_tool()` (called by the ingestion agent mid-turn) *and* standalone (Stage 2 reclassification, `mode: "reclassify"`) |
+
+Each file exports a `build_*_agent(hooks=None) -> Agent` factory — agent *definition* (system prompt, tools, model) lives there; agent *lifecycle* (session caching, mode dispatch) lives in `app/MyAgent/main.py`, which is deliberately just the AgentCore entrypoint and holds no agent-definition logic of its own:
 
 - `BedrockAgentCoreApp()` — the hosting wrapper; handles HTTP serving and session isolation
-- `@app.entrypoint` — called by AgentCore on each invocation (replaces direct `agent(message)` calls)
-- `tools = []` — add custom `@tool` functions and community tools here
+- `@app.entrypoint` — called by AgentCore on each invocation; dispatches to `build_ingestion_agent`/`build_classification_agent` based on `payload["mode"]` (`reclassify` / `summarize` / default)
 - `agent.stream_async` — streaming response back to caller
-- Session management — LRU cache (128 sessions) keyed by `session_id`; resets on cold start
+- Session management — LRU cache (128 sessions) keyed by `session_id`, ingestion agent only; resets on cold start
 
-Custom tools follow the same pattern as standard Strands: `@tool` decorator, typed args, docstring for the tool schema.
+Custom tools (`app/MyAgent/tools/notes.py`) follow the same pattern as standard Strands: `@tool` decorator, typed args, docstring for the tool schema.
 
 **Default build type is CodeZip** (source packaged as zip, no Docker required). Container build is opt-in via `agentcore.json`.
 
