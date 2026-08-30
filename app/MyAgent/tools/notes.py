@@ -1,3 +1,9 @@
+"""
+The 8 custom @tool functions both agents use (see app/MyAgent/agents/ for
+which agent owns which — app/MyAgent/CLAUDE.md has the full table), grouped
+under a TOOLS section below. Everything under INTERNAL HELPERS is a private
+(_-prefixed) implementation detail no agent calls directly.
+"""
 import re
 import uuid
 import json
@@ -7,6 +13,7 @@ import os
 import urllib.parse
 from decimal import Decimal
 
+
 import boto3
 import httpx
 from boto3.dynamodb.conditions import Attr, Key
@@ -14,11 +21,15 @@ from dotenv import load_dotenv
 from strands import tool
 from youtube_transcript_api import CouldNotRetrieveTranscript, YouTubeTranscriptApi
 
+
 from config import EDGE_CONFIDENCE_THRESHOLD, FETCH_URL_MAX_CHARS, KB_RETRIEVE_TOP_K
+
 
 load_dotenv()
 
+
 log = logging.getLogger(__name__)
+
 
 S3_BUCKET = os.environ["S3_BUCKET"]
 KB_ID = os.environ["KB_ID"]
@@ -28,10 +39,12 @@ SOURCES_TABLE = os.environ["SOURCES_TABLE"]
 UPLOADS_BUCKET = os.environ["UPLOADS_BUCKET"]
 REGION = os.environ.get("AWS_REGION", os.environ.get("REGION", "ap-southeast-2"))
 
+
 s3 = boto3.client("s3", region_name=REGION)
 ddb = boto3.resource("dynamodb", region_name=REGION)
 bedrock_agent = boto3.client("bedrock-agent", region_name=REGION)
 bedrock_runtime = boto3.client("bedrock-agent-runtime", region_name=REGION)
+
 
 # Frontmatter link field each edge type is written into on the *source* note's
 # own card (Luhmann-style — connections live on the card, not a separate index).
@@ -44,190 +57,9 @@ EDGE_TYPE_TO_FIELD = {
 }
 
 
-def _slugify(title: str) -> str:
-    slug = re.sub(r'[^\w\s-]', '', title.lower())
-    slug = re.sub(r'[\s_-]+', '-', slug)
-    return slug.strip('-')[:60]
-
-
-# Query-string params that vary per share/click but don't change what's being
-# cited — stripped so the same source shared twice (e.g. a YouTube link with
-# a different ?si= tracking value each time, a real case hit this session)
-# dedupes to one Source record instead of a fresh one per share.
-_TRACKING_PARAMS = {"si", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "feature", "fbclid", "gclid", "t"}
-
-
-def _normalize_source_key(url: str, title: str = "") -> str:
-    """
-    Canonical dedup key for a source URL. YouTube collapses to just the video
-    ID — any two shares of "the same video" only ever differ in tracking or
-    timestamp query params, never in a way that changes identity. Everything
-    else gets a general normalization: lowercase host, drop tracking params,
-    sort what's left, strip trailing slash and fragment.
-
-    Amazon/Kindle is a real, separate case: Kindle's own share action mints a
-    fresh a.co short link (and read.amazon.com deep link) per *highlight*,
-    even for the same book — there's no stable per-book URL to normalize
-    against the way YouTube has a video ID. Dedupes by title instead,
-    whenever a real one was given (not the URL-fallback case) — two
-    citations sharing the exact book title are treated as the same source.
-    A real, if rare, false-merge risk (two different books sharing a title)
-    accepted as a personal-scale tradeoff, rather than one book fragmenting
-    into a fresh Source record per quote shared — a real case hit live.
-    """
-    video_id = _youtube_video_id(url)
-    if video_id:
-        return f"youtube:{video_id}"
-
-    parsed = urllib.parse.urlparse(url)
-    host = parsed.netloc.lower()
-    if title and (host == "a.co" or host.endswith(".amazon.com")):
-        return f"amazon-title:{title.strip().lower()}"
-
-    kept = sorted((k, v) for k, v in urllib.parse.parse_qsl(parsed.query) if k.lower() not in _TRACKING_PARAMS)
-    path = parsed.path.rstrip("/") or "/"
-    return urllib.parse.urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, "", urllib.parse.urlencode(kept), ""))
-
-
-def _resolve_source(source_url: str = "", source_pdf_key: str = "", source_title: str = "", source_author: str = "") -> str | None:
-    """
-    Look up or create the Source record a note cites, deduped by
-    _normalize_source_key for URL sources or a content hash for PDF sources.
-    PDF dedup can't key off the S3 key itself — every upload gets a fresh
-    upload_id/key, so two uploads of the byte-identical file would never
-    match. Instead it uses the object's ETag, which for a single (non-
-    multipart) PUT upload — the only kind this project's presigned-upload
-    flow does — IS the MD5 of the content, so this is a real content hash
-    without a full re-download just to compute one. Returns None if no
-    source was given at all (matches write_note's existing optional-source
-    behavior). source_pdf_key takes priority if both are somehow given.
-    """
-    if source_pdf_key:
-        etag = s3.head_object(Bucket=UPLOADS_BUCKET, Key=source_pdf_key)["ETag"].strip('"')
-        source_key = f"pdf:{etag}"
-        title = source_title or source_pdf_key.rsplit("/", 1)[-1]
-        source_type = "pdf"
-        url = ""
-    elif source_url:
-        source_key = _normalize_source_key(source_url, source_title)
-        title = source_title or source_url
-        source_type = "youtube" if _youtube_video_id(source_url) else "web"
-        url = source_url
-    else:
-        return None
-
-    existing = ddb.Table(SOURCES_TABLE).query(
-        IndexName="source-key-index",
-        KeyConditionExpression=Key("source_key").eq(source_key),
-        Limit=1,
-    ).get("Items", [])
-    if existing:
-        return existing[0]["source_id"]
-
-    source_id = f"{_slugify(title)}-{uuid.uuid4().hex[:8]}"
-    now = datetime.datetime.utcnow().isoformat()
-    ddb.Table(SOURCES_TABLE).put_item(Item={
-        "source_id": source_id,
-        "source_key": source_key,
-        "type": source_type,
-        "title": title,
-        "author": source_author,
-        "url": url,
-        "retrieved_at": now,
-        "created_at": now,
-    })
-    return source_id
-
-
-def _parse_frontmatter(content: str) -> tuple[dict, str]:
-    """
-    Parse the fixed frontmatter schema this module writes (flat scalars + simple
-    list blocks). Not a general YAML parser — only handles the shapes write_note/
-    write_summary/write_edge produce.
-    """
-    end = content.find("\n---\n", 4)
-    fm_lines = content[4:end].split("\n") if content.startswith("---\n") and end != -1 else []
-    body = content[end + 5:] if end != -1 else content
-
-    fields: dict = {}
-    i = 0
-    while i < len(fm_lines):
-        line = fm_lines[i]
-        if not line.strip() or line.startswith(" "):
-            i += 1
-            continue
-        key, _, val = line.partition(":")
-        key, val = key.strip(), val.strip()
-        if val:
-            fields[key] = [] if val == "[]" else val
-            i += 1
-            continue
-        # Scalar with empty value vs. start of a list block — peek ahead.
-        nxt = fm_lines[i + 1].strip() if i + 1 < len(fm_lines) else ""
-        if nxt == "[]":
-            fields[key] = []
-            i += 2
-        elif nxt.startswith("-"):
-            items = []
-            i += 1
-            while i < len(fm_lines) and fm_lines[i].strip().startswith("-"):
-                items.append(fm_lines[i].strip()[1:].strip())
-                i += 1
-            fields[key] = items
-        else:
-            fields[key] = ""
-            i += 1
-    return fields, body
-
-
-def _render_frontmatter(fields: dict) -> str:
-    lines = ["---"]
-    for key, val in fields.items():
-        if isinstance(val, list):
-            if val:
-                lines.append(f"{key}:")
-                lines.extend(f"  - {v}" for v in val)
-            else:
-                lines.append(f"{key}: []")
-        else:
-            lines.append(f"{key}: {val}")
-    lines.append("---\n")
-    return "\n".join(lines)
-
-
-def _regenerate_note_links(note_id: str) -> None:
-    """
-    Rewrite a note's frontmatter link lists from its current outgoing edges in
-    DynamoDB, as [[note_id|Title]] wikilinks so Obsidian's graph/backlinks pick
-    them up. Preserves every other frontmatter field (title, tags, date, ...) and
-    the body exactly as they currently are in S3 — S3 stays source of truth for
-    note content, this only ever touches the generated link fields.
-    """
-    item = ddb.Table(ITEMS_TABLE).get_item(Key={"note_id": note_id}).get("Item")
-    if not item:
-        log.warning(f"Cannot regenerate links: note {note_id} not found in items table")
-        return
-
-    s3_key = item["s3_key"]
-    existing = s3.get_object(Bucket=S3_BUCKET, Key=s3_key)["Body"].read().decode()
-    fields, body = _parse_frontmatter(existing)
-
-    edges = ddb.Table(EDGES_TABLE).query(KeyConditionExpression=Key("from_id").eq(note_id)).get("Items", [])
-    by_type: dict[str, list[str]] = {}
-    for edge in edges:
-        by_type.setdefault(edge["type"], []).append(edge["to_id"])
-
-    target_ids = {tid for ids in by_type.values() for tid in ids}
-    titles = {}
-    for tid in target_ids:
-        target = ddb.Table(ITEMS_TABLE).get_item(Key={"note_id": tid}).get("Item")
-        titles[tid] = target["title"] if target else tid
-
-    for edge_type, field in EDGE_TYPE_TO_FIELD.items():
-        fields[field] = [f"[[{tid}|{titles[tid]}]]" for tid in by_type.get(edge_type, [])]
-
-    s3.put_object(Bucket=S3_BUCKET, Key=s3_key, Body=(_render_frontmatter(fields) + body).encode(), ContentType="text/markdown")
-    log.info(f"Regenerated links for {note_id}: {sum(len(v) for v in by_type.values())} edges")
+# ============================================================================
+# TOOLS
+# ============================================================================
 
 
 @tool
@@ -318,39 +150,6 @@ related_to: []
 
     log.info(f"Written note: {s3_key}")
     return {"note_id": note_id, "s3_key": s3_key, "title": title}
-
-
-def _write_edge_record(from_id: str, to_id: str, edge_type: str, confidence: float, reason: str = "", regenerate: bool = True) -> str:
-    """
-    Unconditional edge write — no threshold/validation, used by write_edge (after
-    it validates) and by write_summary/update_summary for deterministic GROUNDED_IN
-    membership edges, which aren't a confidence-scored classification.
-    """
-    now = datetime.datetime.utcnow().isoformat()
-    edge_id = uuid.uuid4().hex
-    confidence_dec = Decimal(str(confidence))
-    ddb.Table(EDGES_TABLE).put_item(Item={
-        "from_id": from_id,
-        "edge_id": edge_id,
-        "to_id": to_id,
-        "type": edge_type,
-        "confidence": confidence_dec,
-        "authored_by": "model",
-        "created_at": now,
-        "history": [{"action": "created", "by": "model", "at": now, "confidence": confidence_dec, "reason": reason}],
-    })
-    if regenerate:
-        _regenerate_note_links(from_id)
-    log.info(f"Written edge: {from_id} -{edge_type}-> {to_id} ({confidence})")
-    return edge_id
-
-
-def _delete_edges_to(from_id: str, to_id: str, edge_type: str) -> None:
-    """Delete every edge from_id -edge_type-> to_id (normally just one)."""
-    edges = ddb.Table(EDGES_TABLE).query(KeyConditionExpression=Key("from_id").eq(from_id)).get("Items", [])
-    for edge in edges:
-        if edge["to_id"] == to_id and edge["type"] == edge_type:
-            ddb.Table(EDGES_TABLE).delete_item(Key={"from_id": from_id, "edge_id": edge["edge_id"]})
 
 
 @tool
@@ -582,98 +381,6 @@ def trigger_kb_sync() -> str:
     return job_id
 
 
-def _youtube_video_id(url: str) -> str | None:
-    """Extract the video ID from watch/shorts/embed/live/youtu.be URL shapes."""
-    parsed = urllib.parse.urlparse(url)
-    host = parsed.netloc.lower()
-    for prefix in ("www.", "m.", "music."):
-        host = host.removeprefix(prefix)
-    if host == "youtu.be":
-        return parsed.path.lstrip("/").split("/")[0] or None
-    if host == "youtube.com":
-        if parsed.path == "/watch":
-            return urllib.parse.parse_qs(parsed.query).get("v", [None])[0]
-        for prefix in ("/shorts/", "/embed/", "/live/"):
-            if parsed.path.startswith(prefix):
-                return parsed.path[len(prefix):].split("/")[0] or None
-    return None
-
-
-def _fetch_youtube(video_id: str, original_url: str) -> dict:
-    """
-    Transcript (via youtube-transcript-api's timedtext endpoint, no API key
-    needed) plus title/channel (via YouTube's oEmbed endpoint) — replaces
-    fetch_url's default HTML-strip, which returns nothing usable against a
-    JS-rendered watch page. Returns the same {title, author, text} shape
-    fetch_url does for every other content type — no more prepending a
-    "Title: X\\nChannel: Y" header into the text and hoping the caller
-    notices it.
-    """
-    title, channel = "", ""
-    try:
-        with httpx.Client(timeout=10) as client:
-            resp = client.get(
-                "https://www.youtube.com/oembed",
-                params={"url": original_url, "format": "json"},
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                title, channel = data.get("title") or "", data.get("author_name") or ""
-    except httpx.HTTPError:
-        pass
-
-    try:
-        transcript = YouTubeTranscriptApi().fetch(video_id)
-        text = " ".join(snippet.text for snippet in transcript)
-    except CouldNotRetrieveTranscript as e:
-        if not title:
-            raise
-        log.info(f"No YouTube transcript available for {video_id} ({type(e).__name__}: {e}), falling back to title/channel only")
-        text = ("No transcript is available for this video — write the note from "
-                "the title/channel alone if that's enough, or tell the user none was found.")
-        return {"title": title, "author": channel, "text": text[:FETCH_URL_MAX_CHARS]}
-
-    return {"title": title, "author": channel, "text": text[:FETCH_URL_MAX_CHARS]}
-
-
-_DISALLOWED_DOCUMENT_NAME_CHARS = re.compile(r'[^a-zA-Z0-9\s\-()\[\]]')
-
-
-def _sanitize_document_name(name: str) -> str:
-    """Bedrock's document content block only allows alphanumeric, whitespace,
-    hyphens, parentheses, and square brackets in a document name, with no
-    consecutive whitespace — real bug caught live: os.path.splitext only
-    strips the *last* extension, so periods/underscores from a filename or
-    URL slug (e.g. arXiv's "1706.03762", which has no .pdf suffix to strip
-    at all) reached ConverseStream unsanitized and crashed the whole turn
-    with a ValidationException, not just a tool-level error."""
-    cleaned = _DISALLOWED_DOCUMENT_NAME_CHARS.sub(" ", name)
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    return cleaned or "document"
-
-
-_TITLE_RE = re.compile(r'<title[^>]*>(.*?)</title>', re.IGNORECASE | re.DOTALL)
-_AUTHOR_META_PATTERNS = (
-    re.compile(r'<meta[^>]+name=["\']author["\'][^>]+content=["\']([^"\']+)["\']', re.IGNORECASE),
-    re.compile(r'<meta[^>]+property=["\']article:author["\'][^>]+content=["\']([^"\']+)["\']', re.IGNORECASE),
-)
-
-
-def _extract_html_metadata(html: str) -> tuple[str, str]:
-    """Best-effort <title> and author extraction from an HTML page — not a
-    real HTML parser, just enough to stop citations being just a bare URL."""
-    title_match = _TITLE_RE.search(html)
-    title = re.sub(r'\s+', ' ', title_match.group(1)).strip() if title_match else ""
-
-    author = ""
-    for pattern in _AUTHOR_META_PATTERNS:
-        match = pattern.search(html)
-        if match:
-            author = match.group(1).strip()
-            break
-    return title, author
-
-
 @tool
 def read_pdf(pdf_key: str) -> dict:
     """
@@ -749,3 +456,321 @@ def fetch_url(url: str) -> dict:
         text = re.sub(r'<[^>]+>', ' ', response.text)
         text = re.sub(r'\s+', ' ', text).strip()
         return {"title": title, "author": author, "text": text[:FETCH_URL_MAX_CHARS]}
+
+
+# ============================================================================
+# INTERNAL HELPERS
+# ============================================================================
+
+
+def _slugify(title: str) -> str:
+    slug = re.sub(r'[^\w\s-]', '', title.lower())
+    slug = re.sub(r'[\s_-]+', '-', slug)
+    return slug.strip('-')[:60]
+
+
+# Query-string params that vary per share/click but don't change what's being
+# cited — stripped so the same source shared twice (e.g. a YouTube link with
+# a different ?si= tracking value each time, a real case hit this session)
+# dedupes to one Source record instead of a fresh one per share.
+_TRACKING_PARAMS = {"si", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "feature", "fbclid", "gclid", "t"}
+
+
+def _normalize_source_key(url: str, title: str = "") -> str:
+    """
+    Canonical dedup key for a source URL. YouTube collapses to just the video
+    ID — any two shares of "the same video" only ever differ in tracking or
+    timestamp query params, never in a way that changes identity. Everything
+    else gets a general normalization: lowercase host, drop tracking params,
+    sort what's left, strip trailing slash and fragment.
+
+    Amazon/Kindle is a real, separate case: Kindle's own share action mints a
+    fresh a.co short link (and read.amazon.com deep link) per *highlight*,
+    even for the same book — there's no stable per-book URL to normalize
+    against the way YouTube has a video ID. Dedupes by title instead,
+    whenever a real one was given (not the URL-fallback case) — two
+    citations sharing the exact book title are treated as the same source.
+    A real, if rare, false-merge risk (two different books sharing a title)
+    accepted as a personal-scale tradeoff, rather than one book fragmenting
+    into a fresh Source record per quote shared — a real case hit live.
+    """
+    video_id = _youtube_video_id(url)
+    if video_id:
+        return f"youtube:{video_id}"
+
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc.lower()
+    if title and (host == "a.co" or host.endswith(".amazon.com")):
+        return f"amazon-title:{title.strip().lower()}"
+
+    kept = sorted((k, v) for k, v in urllib.parse.parse_qsl(parsed.query) if k.lower() not in _TRACKING_PARAMS)
+    path = parsed.path.rstrip("/") or "/"
+    return urllib.parse.urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, "", urllib.parse.urlencode(kept), ""))
+
+
+def _resolve_source(source_url: str = "", source_pdf_key: str = "", source_title: str = "", source_author: str = "") -> str | None:
+    """
+    Look up or create the Source record a note cites, deduped by
+    _normalize_source_key for URL sources or a content hash for PDF sources.
+    PDF dedup can't key off the S3 key itself — every upload gets a fresh
+    upload_id/key, so two uploads of the byte-identical file would never
+    match. Instead it uses the object's ETag, which for a single (non-
+    multipart) PUT upload — the only kind this project's presigned-upload
+    flow does — IS the MD5 of the content, so this is a real content hash
+    without a full re-download just to compute one. Returns None if no
+    source was given at all (matches write_note's existing optional-source
+    behavior). source_pdf_key takes priority if both are somehow given.
+    """
+    if source_pdf_key:
+        etag = s3.head_object(Bucket=UPLOADS_BUCKET, Key=source_pdf_key)["ETag"].strip('"')
+        source_key = f"pdf:{etag}"
+        title = source_title or source_pdf_key.rsplit("/", 1)[-1]
+        source_type = "pdf"
+        url = ""
+    elif source_url:
+        source_key = _normalize_source_key(source_url, source_title)
+        title = source_title or source_url
+        source_type = "youtube" if _youtube_video_id(source_url) else "web"
+        url = source_url
+    else:
+        return None
+
+    existing = ddb.Table(SOURCES_TABLE).query(
+        IndexName="source-key-index",
+        KeyConditionExpression=Key("source_key").eq(source_key),
+        Limit=1,
+    ).get("Items", [])
+    if existing:
+        return existing[0]["source_id"]
+
+    source_id = f"{_slugify(title)}-{uuid.uuid4().hex[:8]}"
+    now = datetime.datetime.utcnow().isoformat()
+    ddb.Table(SOURCES_TABLE).put_item(Item={
+        "source_id": source_id,
+        "source_key": source_key,
+        "type": source_type,
+        "title": title,
+        "author": source_author,
+        "url": url,
+        "retrieved_at": now,
+        "created_at": now,
+    })
+    return source_id
+
+
+def _parse_frontmatter(content: str) -> tuple[dict, str]:
+    """
+    Parse the fixed frontmatter schema this module writes (flat scalars + simple
+    list blocks). Not a general YAML parser — only handles the shapes write_note/
+    write_summary/write_edge produce.
+    """
+    end = content.find("\n---\n", 4)
+    fm_lines = content[4:end].split("\n") if content.startswith("---\n") and end != -1 else []
+    body = content[end + 5:] if end != -1 else content
+
+    fields: dict = {}
+    i = 0
+    while i < len(fm_lines):
+        line = fm_lines[i]
+        if not line.strip() or line.startswith(" "):
+            i += 1
+            continue
+        key, _, val = line.partition(":")
+        key, val = key.strip(), val.strip()
+        if val:
+            fields[key] = [] if val == "[]" else val
+            i += 1
+            continue
+        # Scalar with empty value vs. start of a list block — peek ahead.
+        nxt = fm_lines[i + 1].strip() if i + 1 < len(fm_lines) else ""
+        if nxt == "[]":
+            fields[key] = []
+            i += 2
+        elif nxt.startswith("-"):
+            items = []
+            i += 1
+            while i < len(fm_lines) and fm_lines[i].strip().startswith("-"):
+                items.append(fm_lines[i].strip()[1:].strip())
+                i += 1
+            fields[key] = items
+        else:
+            fields[key] = ""
+            i += 1
+    return fields, body
+
+
+def _render_frontmatter(fields: dict) -> str:
+    lines = ["---"]
+    for key, val in fields.items():
+        if isinstance(val, list):
+            if val:
+                lines.append(f"{key}:")
+                lines.extend(f"  - {v}" for v in val)
+            else:
+                lines.append(f"{key}: []")
+        else:
+            lines.append(f"{key}: {val}")
+    lines.append("---\n")
+    return "\n".join(lines)
+
+
+def _regenerate_note_links(note_id: str) -> None:
+    """
+    Rewrite a note's frontmatter link lists from its current outgoing edges in
+    DynamoDB, as [[note_id|Title]] wikilinks so Obsidian's graph/backlinks pick
+    them up. Preserves every other frontmatter field (title, tags, date, ...) and
+    the body exactly as they currently are in S3 — S3 stays source of truth for
+    note content, this only ever touches the generated link fields.
+    """
+    item = ddb.Table(ITEMS_TABLE).get_item(Key={"note_id": note_id}).get("Item")
+    if not item:
+        log.warning(f"Cannot regenerate links: note {note_id} not found in items table")
+        return
+
+    s3_key = item["s3_key"]
+    existing = s3.get_object(Bucket=S3_BUCKET, Key=s3_key)["Body"].read().decode()
+    fields, body = _parse_frontmatter(existing)
+
+    edges = ddb.Table(EDGES_TABLE).query(KeyConditionExpression=Key("from_id").eq(note_id)).get("Items", [])
+    by_type: dict[str, list[str]] = {}
+    for edge in edges:
+        by_type.setdefault(edge["type"], []).append(edge["to_id"])
+
+    target_ids = {tid for ids in by_type.values() for tid in ids}
+    titles = {}
+    for tid in target_ids:
+        target = ddb.Table(ITEMS_TABLE).get_item(Key={"note_id": tid}).get("Item")
+        titles[tid] = target["title"] if target else tid
+
+    for edge_type, field in EDGE_TYPE_TO_FIELD.items():
+        fields[field] = [f"[[{tid}|{titles[tid]}]]" for tid in by_type.get(edge_type, [])]
+
+    s3.put_object(Bucket=S3_BUCKET, Key=s3_key, Body=(_render_frontmatter(fields) + body).encode(), ContentType="text/markdown")
+    log.info(f"Regenerated links for {note_id}: {sum(len(v) for v in by_type.values())} edges")
+
+
+def _write_edge_record(from_id: str, to_id: str, edge_type: str, confidence: float, reason: str = "", regenerate: bool = True) -> str:
+    """
+    Unconditional edge write — no threshold/validation, used by write_edge (after
+    it validates) and by write_summary/update_summary for deterministic GROUNDED_IN
+    membership edges, which aren't a confidence-scored classification.
+    """
+    now = datetime.datetime.utcnow().isoformat()
+    edge_id = uuid.uuid4().hex
+    confidence_dec = Decimal(str(confidence))
+    ddb.Table(EDGES_TABLE).put_item(Item={
+        "from_id": from_id,
+        "edge_id": edge_id,
+        "to_id": to_id,
+        "type": edge_type,
+        "confidence": confidence_dec,
+        "authored_by": "model",
+        "created_at": now,
+        "history": [{"action": "created", "by": "model", "at": now, "confidence": confidence_dec, "reason": reason}],
+    })
+    if regenerate:
+        _regenerate_note_links(from_id)
+    log.info(f"Written edge: {from_id} -{edge_type}-> {to_id} ({confidence})")
+    return edge_id
+
+
+def _delete_edges_to(from_id: str, to_id: str, edge_type: str) -> None:
+    """Delete every edge from_id -edge_type-> to_id (normally just one)."""
+    edges = ddb.Table(EDGES_TABLE).query(KeyConditionExpression=Key("from_id").eq(from_id)).get("Items", [])
+    for edge in edges:
+        if edge["to_id"] == to_id and edge["type"] == edge_type:
+            ddb.Table(EDGES_TABLE).delete_item(Key={"from_id": from_id, "edge_id": edge["edge_id"]})
+
+
+def _youtube_video_id(url: str) -> str | None:
+    """Extract the video ID from watch/shorts/embed/live/youtu.be URL shapes."""
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc.lower()
+    for prefix in ("www.", "m.", "music."):
+        host = host.removeprefix(prefix)
+    if host == "youtu.be":
+        return parsed.path.lstrip("/").split("/")[0] or None
+    if host == "youtube.com":
+        if parsed.path == "/watch":
+            return urllib.parse.parse_qs(parsed.query).get("v", [None])[0]
+        for prefix in ("/shorts/", "/embed/", "/live/"):
+            if parsed.path.startswith(prefix):
+                return parsed.path[len(prefix):].split("/")[0] or None
+    return None
+
+
+def _fetch_youtube(video_id: str, original_url: str) -> dict:
+    """
+    Transcript (via youtube-transcript-api's timedtext endpoint, no API key
+    needed) plus title/channel (via YouTube's oEmbed endpoint) — replaces
+    fetch_url's default HTML-strip, which returns nothing usable against a
+    JS-rendered watch page. Returns the same {title, author, text} shape
+    fetch_url does for every other content type — no more prepending a
+    "Title: X\\nChannel: Y" header into the text and hoping the caller
+    notices it.
+    """
+    title, channel = "", ""
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.get(
+                "https://www.youtube.com/oembed",
+                params={"url": original_url, "format": "json"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                title, channel = data.get("title") or "", data.get("author_name") or ""
+    except httpx.HTTPError:
+        pass
+
+    try:
+        transcript = YouTubeTranscriptApi().fetch(video_id)
+        text = " ".join(snippet.text for snippet in transcript)
+    except CouldNotRetrieveTranscript as e:
+        if not title:
+            raise
+        log.info(f"No YouTube transcript available for {video_id} ({type(e).__name__}: {e}), falling back to title/channel only")
+        text = ("No transcript is available for this video — write the note from "
+                "the title/channel alone if that's enough, or tell the user none was found.")
+        return {"title": title, "author": channel, "text": text[:FETCH_URL_MAX_CHARS]}
+
+    return {"title": title, "author": channel, "text": text[:FETCH_URL_MAX_CHARS]}
+
+
+_DISALLOWED_DOCUMENT_NAME_CHARS = re.compile(r'[^a-zA-Z0-9\s\-()\[\]]')
+
+
+def _sanitize_document_name(name: str) -> str:
+    """Bedrock's document content block only allows alphanumeric, whitespace,
+    hyphens, parentheses, and square brackets in a document name, with no
+    consecutive whitespace — real bug caught live: os.path.splitext only
+    strips the *last* extension, so periods/underscores from a filename or
+    URL slug (e.g. arXiv's "1706.03762", which has no .pdf suffix to strip
+    at all) reached ConverseStream unsanitized and crashed the whole turn
+    with a ValidationException, not just a tool-level error."""
+    cleaned = _DISALLOWED_DOCUMENT_NAME_CHARS.sub(" ", name)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned or "document"
+
+
+_TITLE_RE = re.compile(r'<title[^>]*>(.*?)</title>', re.IGNORECASE | re.DOTALL)
+
+
+_AUTHOR_META_PATTERNS = (
+    re.compile(r'<meta[^>]+name=["\']author["\'][^>]+content=["\']([^"\']+)["\']', re.IGNORECASE),
+    re.compile(r'<meta[^>]+property=["\']article:author["\'][^>]+content=["\']([^"\']+)["\']', re.IGNORECASE),
+)
+
+
+def _extract_html_metadata(html: str) -> tuple[str, str]:
+    """Best-effort <title> and author extraction from an HTML page — not a
+    real HTML parser, just enough to stop citations being just a bare URL."""
+    title_match = _TITLE_RE.search(html)
+    title = re.sub(r'\s+', ' ', title_match.group(1)).strip() if title_match else ""
+
+    author = ""
+    for pattern in _AUTHOR_META_PATTERNS:
+        match = pattern.search(html)
+        if match:
+            author = match.group(1).strip()
+            break
+    return title, author

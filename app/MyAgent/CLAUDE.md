@@ -32,6 +32,8 @@ Runtime deps are in `pyproject.toml`. The `.env` file (gitignored) holds local c
 
 ## Tools
 
+All 8 live under a single `# TOOLS` section at the top of `tools/notes.py`, grouped together and ahead of every private (`_`-prefixed) helper — no need to dig through implementation details to see what's agent-callable.
+
 | Tool | Agent | Purpose |
 |---|---|---|
 | `write_note` | ingestion | Writes `.md` + sidecar to S3, record to DynamoDB `items` |
