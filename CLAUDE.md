@@ -104,7 +104,7 @@ Custom tools follow the same pattern as standard Strands: `@tool` decorator, typ
 
 ![Slip Box architecture diagram](docs/diagrams/architecture.png)
 
-*Solid lines are live today; dashed/dotted are planned (frontend, split-out agents, Neptune). Regenerate with `uv run python scripts/generate_architecture_diagram.py` (run from `app/MyAgent/` so it picks up the venv) after any change to what's actually wired up.*
+*Solid lines are live today; dashed/dotted are either an async/background path (KB sync, Stage 2 reclassify) or not yet built (Research/SWOT agents, Neptune). Regenerate with `uv run python scripts/generate_architecture_diagram.py` (run from `app/MyAgent/` so it picks up the venv) after any change to what's actually wired up.*
 
 ### Multi-agent design
 
