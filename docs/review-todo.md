@@ -546,6 +546,12 @@ In today's actual usage: every request is a cache miss (the cache just holds one
 
 Not a bug — nothing behaves incorrectly — but it means this layer was built for a multi-turn conversation pattern the app doesn't currently exercise. **Needs a decision:** (a) keep as intentional future-proofing for eventual multi-turn ingest conversations (`_extract_prompt`'s existing shape-handling suggests that was the original intent), or (b) simplify now — drop the LRU cache since it does nothing today. Same applies to `S3SessionManager` from the `strands-agents-sdk` skill: it would be no more useful than the current setup for the same underlying reason (no session reuse), so it's not an obvious upgrade path either — only worth adopting once (a) is chosen and cold-start session loss actually matters.
 
+## 14. `GET /items?type=X&limit=N` can under-return even when more matches exist
+
+Found live 2026-08-30 during PermanentNote deploy verification (`?type=literature-note&limit=1` returned zero items against a corpus that has several). Root cause: `list_items` (`app/api/routers/items.py`) passes `Limit` alongside `FilterExpression` in the same DynamoDB `Query` call — DynamoDB applies `Limit` to items *evaluated* against the key condition before the filter runs, not to items returned after filtering, so a small `limit` combined with a `type` filter can come back with fewer (even zero) matches despite real ones existing further into the index. Same risk applies to `source_id` + `type` together.
+
+Not urgent — no caller currently combines a small `limit` with `type` in a way that depends on getting every match (the `?type=` filter is mostly used unpaginated or with a generous default `limit=100`), and the existing `cursor`/`LastEvaluatedKey` pagination already means a caller *can* page through to find more if it cared to. Flagging so it doesn't get relied on silently as "if it returns fewer than N, there are fewer than N."
+
 ---
 
 ## Expo vs Next.js for frontend
