@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Slip Box is a multi-agent "second brain" built with the AWS Strands Agents SDK and hosted on AgentCore Runtime. It ingests sources (articles, YouTube, PDF, plain text), classifies typed relationships between them (SUPPORTS / CONTRADICTS / EXTENDS), and maintains a graph of those connections in Amazon Neptune. All edges are auto-written; confidence score is stored as metadata and surfaced visually in the graph (low-confidence edges render differently) so the user can correct anything they disagree with.
+Slip Box is a multi-agent "second brain" built with the AWS Strands Agents SDK and hosted on AgentCore Runtime. It ingests sources (articles, YouTube, PDF, plain text), classifies typed relationships between them (SUPPORTS / CONTRADICTS / EXTENDS), and maintains a graph of those connections in DynamoDB (Amazon Neptune is the intended production graph store — see Storage below — but isn't wired up yet; DynamoDB covers all MVP query needs). All edges are auto-written; confidence score is stored as metadata and surfaced visually in the graph (low-confidence edges render differently) so the user can correct anything they disagree with.
 
 Architecture and design decisions live in this file (below) and in [`docs/build-log.md`](docs/build-log.md) (chronological). The original hackathon pitch/submission strategy is in [`docs/hackathon-pitch.md`](docs/hackathon-pitch.md). AgentCore config and CLI reference is in [`AGENTS.md`](AGENTS.md). Adding a new DynamoDB table or GSI has a real checklist — see [`docs/schema-change-checklist.md`](docs/schema-change-checklist.md) before starting one.
 
@@ -108,35 +108,35 @@ Custom tools follow the same pattern as standard Strands: `@tool` decorator, typ
 
 ### Multi-agent design
 
-Four separate Strands agents — not one mega-prompt:
+Four separate Strands agents in the original design — not one mega-prompt. Two are built and live; two are deferred (see `docs/future-scope.md`, `docs/review-todo.md` #7):
 
-| Agent | Role |
-|---|---|
-| Ingestion agent | Extract, summarize, embed incoming source |
-| Classification agent | Propose and score edge type (SUPPORTS/CONTRADICTS/EXTENDS) |
-| Research agent | Outward search/fetch fan-out (`--research` mode only) |
-| SWOT/analysis agent | Cluster synthesis and analysis |
+| Agent | Role | Status |
+|---|---|---|
+| Ingestion agent | Extract, summarize, embed incoming source | Live |
+| Classification agent | Propose and score edge type (SUPPORTS/CONTRADICTS/EXTENDS) | Live (split out via `Agent.as_tool()`) |
+| Research agent | Outward search/fetch fan-out (`--research` mode) | **Deferred, not built** — moved out of MVP scope 2026-08-30, blocked on picking a web-search provider |
+| SWOT/analysis agent | Cluster synthesis and analysis | **Deferred, not built** — stretch goal |
 
 Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring these together.
 
 ### Two-tier ingestion
 
-- **Default path:** ingest → write `.md` to S3 → trigger KB sync → semantic retrieval → classification → write to DynamoDB + Neptune
-- **`--research` flag:** same, but triggers the research agent to fan out before classification
+- **Default path (live):** ingest → write `.md` to S3 → trigger KB sync → semantic retrieval → classification → write to DynamoDB
+- **`--research` flag (not built — see above):** designed to trigger a research agent to fan out before classification; this mode does not exist today
 
 ### Confidence and edge correction
 
 - Classification agent scores each proposed edge with a confidence value (0–1).
-- **Threshold (`EDGE_CONFIDENCE_THRESHOLD` in `app/MyAgent/config.py`, default 0.65):** edges at or above threshold are written to Neptune; edges below are dropped entirely — no queue, no noise.
-- Confidence is stored as metadata on the Neptune edge and in the `.md.metadata.json` sidecar.
+- **Threshold (`EDGE_CONFIDENCE_THRESHOLD` in `app/MyAgent/config.py`, default 0.65):** edges at or above threshold are written to DynamoDB's `edges` table (the live graph store — see Storage below); edges below are dropped entirely — no queue, no noise.
+- Confidence is stored as metadata on the DynamoDB edge record and in the `.md.metadata.json` sidecar.
 - In the graph view, edges near the threshold render differently (dashed line / muted colour) so the user can spot and correct anything they disagree with inline.
 - All edges are user-editable/deletable from the graph view; append-only `history` log per edge for provenance.
 - To re-examine dropped connections, the user can ask the agent "what else is this connected to?" and classification reruns on demand.
 
 **Connections live on the card, matching the original method** (Luhmann's notes carried references to other notes on the card itself, not in a separate index):
-- Connections are written into the note's own frontmatter (not the body) as typed link lists (`supports`, `contradicts`, `extends`, `related_to`) using `[[wikilinks]]`, so Obsidian's graph/backlinks picks them up. Regenerated from Neptune's current edge state on every change, never appended. Body stays pure prose; frontmatter is system-generated — no clobbering risk.
+- Connections are written into the note's own frontmatter (not the body) as typed link lists (`supports`, `contradicts`, `extends`, `related_to`) using `[[wikilinks]]`, so Obsidian's graph/backlinks picks them up. Regenerated from DynamoDB's current edge state on every change, never appended. Body stays pure prose; frontmatter is system-generated — no clobbering risk.
 - Excluded from KB embedding like the rest of frontmatter; mirrored into `.md.metadata.json` for KB filtering.
-- **Neptune stays the source of truth for the graph** — S3 is source of truth for note content, frontmatter connections are a generated reflection, never authored directly.
+- **DynamoDB stays the source of truth for the graph today** (Neptune is the intended eventual source of truth once it's wired up) — S3 is source of truth for note content, frontmatter connections are a generated reflection, never authored directly.
 
 ### Storage
 
@@ -169,10 +169,9 @@ Review Strands multi-agent primitives (Agent-as-Tool, Swarm, A2A) before wiring 
 
 ### Key Strands tools
 
-- Bedrock Knowledge Base retrieval — semantic search against ingested `.md` notes
-- Web search/fetch (Tavily/Exa via `strands_tools`) — research fan-out
-- Custom `@tool` functions — Neptune writes, DynamoDB writes, YouTube transcript extraction, `read_pdf` (hands an uploaded PDF to the model as a native Bedrock document block), SWOT logic
-- `handoff_to_user` — confidence-gated human review
+Live today (`app/MyAgent/tools/notes.py`, full list/purposes in `app/MyAgent/CLAUDE.md`'s Tools table): `write_note`, `write_edge`, `write_summary`, `update_summary`, `search_notes` (Bedrock KB retrieval), `trigger_kb_sync`, `fetch_url` (branches by content type; YouTube transcript via `youtube-transcript-api`), `read_pdf` (native Bedrock document block). `classify_relationships` wraps the classification agent as a tool (`Agent.as_tool()`) for the ingestion agent to call.
+
+Not built: web search/fetch (Tavily/Exa via `strands_tools`) for `--research` fan-out — see `docs/future-scope.md`. `handoff_to_user` isn't used anywhere in the code — confidence-gated review happens via the graph UI (edges below threshold are dropped, not queued for a handoff), not an in-conversation human-in-the-loop tool call.
 
 **Before hand-building a new tool or capability, check whether `strands-agents-tools` (`strands_tools`) or the AgentCore SDK already ships it** — e.g. `tavily`/`exa` already do web search, AgentCore ships a managed Browser sandbox. See the `.claude/skills/strands-agents-sdk` and `.claude/skills/bedrock-agentcore` skills' "Premade tools/capabilities" sections for what's already there. Re-run that audit (install into a scratch dir, read the real installed source — don't trust a stale list) before starting `--research` fan-out specifically if it's been more than a few weeks since the skills' last-checked date (2026-08-22) — the package may have added or changed tools since.
 - PDF ingestion is built (`app/MyAgent/tools/notes.py`'s `read_pdf` tool) — via a web upload page (`app/web/app/upload/page.tsx`) presigning direct-to-S3 uploads into `slip-box-uploads`, not via `fetch_url`. `read_pdf` hands the model a native Bedrock **document content block** rather than extracting text in Python — same technique `strands_tools.file_read`'s `document` mode uses, hand-written here to avoid pulling in that whole package for one capability. No page-count/size cap yet — see `docs/build-log.md`'s PDF ingestion entry and `docs/review-todo.md` #6 for the known gap.
@@ -205,7 +204,7 @@ Not a uniform rule across all three: `Item` and `SummaryCard` are information tr
 
 Build in this order, get each layer solid before moving on:
 
-1. Fast-path ingestion → DynamoDB/Neptune writes
+1. Fast-path ingestion → DynamoDB writes
 2. Inline edge correction UI (graph view) — pivoted away from a separate pending-review queue, see Confidence and edge correction above
 3. SWOT analysis and permanent note promotion (stretch)
 4. Frontmatter as a pending-connection review surface (stretch)

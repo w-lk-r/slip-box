@@ -10,13 +10,23 @@ Built for the [Agents for Humans Hackathon](https://agentsforhumans.devpost.com)
 
 Tools like Obsidian and physical Zettelkasten slip-boxes get abandoned because managing the system costs more than using it. NotebookLM, Mem, and Sinapsus show you *similarity* — Slip Box shows **typed relationships** (SUPPORTS / CONTRADICTS / EXTENDS) and reasons about *how* things relate. Edges are auto-written above a confidence threshold and dropped below it — no queue, no noise — with confidence stored as metadata so low-confidence edges can render differently in the graph for the user to correct inline.
 
-## Two Modes
+## What's built
 
-**Default:** send a source → embed → auto-match → confident connections written straight to the graph. Fast, always-on.
+Two Strands agents — an ingestion agent and a classification agent (split out via `Agent.as_tool()`), both live on AgentCore Runtime — plus a full product loop around them: a **Next.js web app** (force-directed graph view with inline edge correction, review queue, source browsing, PDF upload, permanent-note writing) and an **Expo mobile app** (the primary day-to-day app — share-sheet capture, review stacks, flip-through note browsing, a curated keyword index, on-demand summarization), both backed by a **FastAPI + API Gateway + Lambda** service.
 
-**`--research` flag:** same ingestion, but the agent fans out to find corroborating and contradicting material before folding results into the graph. Slower and deliberate.
+Send a source (article, YouTube link, PDF, plain text) → the ingestion agent extracts and writes atomic notes → the classification agent scores typed relationships (SUPPORTS / CONTRADICTS / EXTENDS / RELATED_TO) against the rest of your corpus → confident connections write straight to the graph, low-confidence ones are dropped rather than queued, and anything near the threshold renders differently in the graph view so you can correct it inline.
+
+An outward research fan-out mode (`--research` — search the web for corroborating/contradicting material before classification) was designed but is **not built**; it's out of MVP scope for now, blocked on picking a web-search provider. See [`docs/future-scope.md`](docs/future-scope.md) for the design.
 
 See the root [`CLAUDE.md`](CLAUDE.md) for full architecture and design decisions, and [`docs/build-log.md`](docs/build-log.md) for the build's chronological progress.
+
+## Live Demo
+
+[main.d2viclhggmi7s9.amplifyapp.com](https://main.d2viclhggmi7s9.amplifyapp.com) — password-protected, credentials provided in the Devpost submission.
+
+## Architecture
+
+![Slip Box architecture diagram](docs/diagrams/architecture.png)
 
 ## Getting Started
 
